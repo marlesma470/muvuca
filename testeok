@@ -2,34 +2,9 @@ import sys
 import os
 import traceback
 import time
-import subprocess
-import tempfile
 import shutil
+import tempfile
 from datetime import datetime
-from pathlib import Path
-
-# ============================================================
-# DETECTAR SE ESTÁ EM UMA PASTA DE REDE
-# ============================================================
-def is_network_path(path):
-    """Verifica se o caminho é uma pasta de rede (UNC ou mapeada)."""
-    try:
-        # Verifica se é UNC
-        if path.startswith('\\\\') or path.startswith('//'):
-            return True
-        # Verifica se é unidade mapeada (Windows)
-        if sys.platform == 'win32':
-            import ctypes.wintypes
-            drive = os.path.splitdrive(path)[0]
-            if drive:
-                # Verifica o tipo de unidade
-                drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive + '\\')
-                # DRIVE_REMOTE = 4
-                if drive_type == 4:
-                    return True
-        return False
-    except:
-        return False
 
 # ============================================================
 # LOGGER DE EMERGÊNCIA
@@ -49,103 +24,15 @@ def debug_print(msg):
         pass
 
 # ============================================================
-# FUNÇÃO PARA COPIAR EXECUTÁVEL PARA LOCAL E REINICIAR
-# ============================================================
-def relancar_localmente():
-    """Copia o executável para uma pasta temporária local e o reinicia."""
-    debug_print("=== RELANÇAMENTO LOCAL ===")
-    try:
-        # Pasta temporária local
-        temp_dir = os.path.join(os.environ.get('TEMP', tempfile.gettempdir()), 'AutomacaoCustodia_Local')
-        os.makedirs(temp_dir, exist_ok=True)
-        debug_print(f"Pasta temporária local: {temp_dir}")
-        
-        # Caminho do executável atual
-        current_exe = sys.executable if getattr(sys, 'frozen', False) else __file__
-        debug_print(f"Executável atual: {current_exe}")
-        
-        if not os.path.exists(current_exe):
-            debug_print("Executável não encontrado.")
-            return False
-        
-        # Copiar arquivos necessários
-        dest_exe = os.path.join(temp_dir, os.path.basename(current_exe))
-        debug_print(f"Copiando para: {dest_exe}")
-        
-        # Se for um .exe (PyInstaller), copiar apenas ele e os recursos
-        if getattr(sys, 'frozen', False):
-            # Copiar o .exe
-            shutil.copy2(current_exe, dest_exe)
-            # Copiar arquivos auxiliares (GIFs, ícone, etc.)
-            for ext in ['.gif', '.ico']:
-                for file in os.listdir(os.path.dirname(current_exe)):
-                    if file.endswith(ext):
-                        src = os.path.join(os.path.dirname(current_exe), file)
-                        dst = os.path.join(temp_dir, file)
-                        shutil.copy2(src, dst)
-                        debug_print(f"Copiado: {file}")
-        else:
-            # Se for script Python, copiar tudo (simplificado)
-            src_dir = os.path.dirname(current_exe)
-            for item in os.listdir(src_dir):
-                src = os.path.join(src_dir, item)
-                dst = os.path.join(temp_dir, item)
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst, ignore_dangling_symlinks=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-                else:
-                    shutil.copy2(src, dst)
-            debug_print("Código copiado para local.")
-        
-        # Executar o novo processo
-        debug_print(f"Iniciando processo local: {dest_exe}")
-        if getattr(sys, 'frozen', False):
-            subprocess.Popen([dest_exe], shell=True)
-        else:
-            subprocess.Popen([sys.executable, dest_exe], shell=True)
-        
-        debug_print("Processo local iniciado. Encerrando instância atual.")
-        return True
-    except Exception as e:
-        debug_print(f"Erro ao relançar localmente: {e}")
-        return False
-
-# ============================================================
-# IMPORTAÇÕES (com log)
+# IMPORTAÇÕES
 # ============================================================
 debug_print("=== INÍCIO DO SCRIPT ===")
 debug_print(f"Diretório atual: {os.getcwd()}")
 debug_print(f"Python: {sys.version}")
-debug_print(f"Plataforma: {sys.platform}")
 
-# VERIFICAR SE ESTÁ EM REDE
-if is_network_path(os.getcwd()):
-    debug_print("ALERTA: Executando em pasta de rede.")
-    # Se estiver em rede e NÃO for a versão local, relançar
-    if not os.getenv('AUTOMACAO_LOCAL', '0') == '1':
-        debug_print("Relançando a partir de uma pasta local...")
-        if relancar_localmente():
-            debug_print("Relançamento local bem-sucedido. Saindo da instância atual.")
-            sys.exit(0)
-        else:
-            debug_print("Falha no relançamento. Continuando em rede (pode falhar).")
-    else:
-        debug_print("Executando na cópia local (variável AUTOMACAO_LOCAL definida).")
-else:
-    debug_print("Executando em pasta local.")
-
-# Adicionar src ao path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 debug_print("sys.path modificado")
 
-# ============================================================
-# FORÇAR O PLUGIN WINDOWS (evita problemas em rede)
-# ============================================================
-os.environ['QT_QPA_PLATFORM'] = 'windows'
-debug_print("QT_QPA_PLATFORM=windows definido.")
-
-# ============================================================
-# IMPORTAÇÕES DO SISTEMA
-# ============================================================
 try:
     debug_print("Importando PySide6...")
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout
@@ -168,7 +55,39 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================================
-# SPLASH SCREEN
+# FUNÇÃO PARA COPIAR RECURSOS PARA PASTA TEMPORÁRIA LOCAL
+# ============================================================
+def copiar_recursos_local():
+    """Copia GIFs e ícone para uma pasta temporária local para evitar latência de rede."""
+    temp_dir = os.path.join(tempfile.gettempdir(), 'AutomacaoCustodia')
+    os.makedirs(temp_dir, exist_ok=True)
+    debug_print(f"Pasta temporária: {temp_dir}")
+    
+    recursos = {
+        'loading.gif': 'loading.gif',
+        'sicredi.gif': 'sicredi.gif',
+        'sistem.ico': 'sistem.ico'
+    }
+    
+    caminhos_locais = {}
+    for nome, arquivo in recursos.items():
+        origem = os.path.join(os.path.dirname(__file__), arquivo)
+        destino = os.path.join(temp_dir, arquivo)
+        if os.path.exists(origem):
+            try:
+                shutil.copy2(origem, destino)
+                debug_print(f"Copiado {arquivo} para {destino}")
+                caminhos_locais[nome] = destino
+            except Exception as e:
+                debug_print(f"Erro ao copiar {arquivo}: {e}")
+                caminhos_locais[nome] = origem  # fallback para origem
+        else:
+            debug_print(f"Arquivo {arquivo} não encontrado na origem.")
+            caminhos_locais[nome] = origem
+    return caminhos_locais, temp_dir
+
+# ============================================================
+# SPLASH SCREEN (USANDO RECURSOS LOCAIS)
 # ============================================================
 class SplashScreen(QDialog):
     def __init__(self, gif_path: str, duration_ms: int = 5000, parent=None):
@@ -236,15 +155,16 @@ def show_splash(gif_path: str, duration_ms: int = 5000):
     QApplication.processEvents()
     return splash
 
-
 # ============================================================
-# FUNÇÃO PARA FORÇAR JANELA VISÍVEL (COM DELAY)
+# FUNÇÃO PARA ABRIR DIÁLOGO COM TIMEOUT E FALLBACK
 # ============================================================
-def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
+def abrir_dialogo_com_timeout(dialog_class, timeout_ms=10000, *args, **kwargs):
+    """Abre um diálogo com timeout. Se demorar mais que timeout_ms, exibe erro e encerra."""
     nome_classe = dialog_class.__name__
-    debug_print(f"-> Abrindo {nome_classe} com garantia...")
+    debug_print(f"-> Abrindo {nome_classe} com timeout de {timeout_ms}ms...")
     
     try:
+        # Criar instância
         debug_print(f"Criando instância de {nome_classe}")
         dialog = dialog_class(*args, **kwargs)
         debug_print(f"Instância criada: {dialog}")
@@ -252,45 +172,46 @@ def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
         # Configurar janela
         dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         dialog.setModal(True)
-        
-        # Centralizar
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + (screen.width() - dialog.width()) // 2
         y = screen.y() + (screen.height() - dialog.height()) // 2
         dialog.move(x, y)
         debug_print(f"Posicionado em ({x}, {y})")
         
-        # Mostrar com delay (100ms para processamento)
+        # Mostrar janela
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
         QApplication.processEvents()
-        debug_print("show() e raise_() chamados.")
+        debug_print(f"show() chamado em {nome_classe}")
         
-        # Timer de segurança: após 500ms, tentar novamente se não visível
-        def verificar_visibilidade():
-            if not dialog.isVisible():
-                debug_print("Janela não visível após 500ms. Reaplicando show()...")
-                dialog.show()
-                dialog.raise_()
-                QApplication.processEvents()
+        # Timer para timeout
+        timeout_reached = False
         
-        QTimer.singleShot(500, verificar_visibilidade)
-        
-        # Keep-alive timer (mantém no topo)
-        def manter_top():
-            if dialog.isVisible():
-                dialog.raise_()
-                dialog.activateWindow()
+        def on_timeout():
+            nonlocal timeout_reached
+            timeout_reached = True
+            debug_print(f"TIMEOUT: {nome_classe} não respondeu em {timeout_ms}ms. Fechando diálogo.")
+            dialog.reject()
         
         timer = QTimer()
-        timer.timeout.connect(manter_top)
-        timer.start(200)  # a cada 200ms
+        timer.setSingleShot(True)
+        timer.timeout.connect(on_timeout)
+        timer.start(timeout_ms)
         
+        # Executar o diálogo
         debug_print(f"Chamando exec() em {nome_classe}...")
         result = dialog.exec()
         timer.stop()
         debug_print(f"exec() retornou {result} para {nome_classe}")
+        
+        if timeout_reached:
+            debug_print(f"{nome_classe} foi fechado por timeout.")
+            QMessageBox.critical(None, "Erro de tempo", 
+                f"A janela {nome_classe} não pôde ser exibida em tempo hábil.\n"
+                "Verifique a conexão de rede ou a performance do sistema.")
+            return QDialog.Rejected, dialog
+        
         return result, dialog
         
     except Exception as e:
@@ -301,7 +222,6 @@ def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
         except:
             pass
         return QDialog.Rejected, None
-
 
 # ============================================================
 # MAIN
@@ -316,24 +236,28 @@ def main():
         debug_print(f"Erro ao configurar logger: {e}")
     
     try:
+        # Copiar recursos para pasta local
+        recursos, temp_dir = copiar_recursos_local()
+        debug_print(f"Recursos copiados para {temp_dir}")
+        
         debug_print("Criando QApplication...")
         app = QApplication(sys.argv)
         debug_print("QApplication criada.")
         
-        # Forçar software renderer (útil em rede)
+        # Software renderer para evitar problemas gráficos em rede
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
         debug_print("AA_UseSoftwareOpenGL aplicado.")
         
-        # Ícone
-        icon_path = os.path.join(os.path.dirname(__file__), "sistem.ico")
+        # Ícone (usando local)
+        icon_path = recursos.get('sistem.ico')
         if os.path.exists(icon_path):
             app.setWindowIcon(QIcon(icon_path))
             debug_print("Ícone carregado.")
         else:
             debug_print(f"Ícone não encontrado: {icon_path}")
         
-        # Splash
-        loading_gif = os.path.join(os.path.dirname(__file__), "loading.gif")
+        # Splash (usando local)
+        loading_gif = recursos.get('loading.gif')
         if os.path.exists(loading_gif):
             debug_print("Exibindo splash...")
             splash = show_splash(loading_gif, 5000)
@@ -347,9 +271,9 @@ def main():
         else:
             debug_print("loading.gif não encontrado.")
         
-        # Credenciais
+        # Credenciais (com timeout de 10 segundos)
         debug_print("Abrindo CredentialSetupDialog...")
-        result_cred, cred_dialog = abrir_dialogo_com_garantia(CredentialSetupDialog)
+        result_cred, cred_dialog = abrir_dialogo_com_timeout(CredentialSetupDialog, 10000)
         if result_cred != QDialog.Accepted:
             debug_print("Credenciais canceladas/erro. Encerrando.")
             try:
@@ -362,7 +286,7 @@ def main():
         # Loop de grupos
         while True:
             debug_print("Abrindo seleção de grupo...")
-            result_group, group_dialog = abrir_dialogo_com_garantia(GroupSelectionDialog)
+            result_group, group_dialog = abrir_dialogo_com_timeout(GroupSelectionDialog, 10000)
             if result_group != QDialog.Accepted:
                 debug_print("Grupo cancelado. Encerrando.")
                 break
@@ -374,8 +298,8 @@ def main():
             
             debug_print(f"Grupo: {grupo}")
             
-            # Splash sicredi
-            sicredi_gif = os.path.join(os.path.dirname(__file__), "sicredi.gif")
+            # Splash sicredi (usando local)
+            sicredi_gif = recursos.get('sicredi.gif')
             if os.path.exists(sicredi_gif):
                 debug_print("Exibindo sicredi.gif...")
                 splash2 = show_splash(sicredi_gif, 5000)
@@ -389,20 +313,16 @@ def main():
             else:
                 debug_print("sicredi.gif não encontrado.")
             
-            # MainWindow
+            # MainWindow (com timeout)
             debug_print("Criando MainWindow...")
             try:
                 main_window = MainWindow(grupo)
                 debug_print("MainWindow criada.")
-                
-                # Garantir visibilidade
-                dialog = main_window
-                dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-                dialog.show()
-                dialog.raise_()
-                dialog.activateWindow()
+                # Forçar visibilidade
+                main_window.show()
+                main_window.raise_()
+                main_window.activateWindow()
                 QApplication.processEvents()
-                
                 debug_print("MainWindow exibida. Entrando no loop de eventos...")
                 app.exec()
                 debug_print("Loop de eventos finalizado.")
