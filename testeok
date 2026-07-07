@@ -1,0 +1,194 @@
+import sys
+import os
+import traceback
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout
+from PySide6.QtGui import QIcon, QMovie
+from PySide6.QtCore import Qt, QTimer, QEventLoop
+
+from src.gui.credential_dialog import CredentialSetupDialog
+from src.gui.group_selection import GroupSelectionDialog
+from src.gui.main_window import MainWindow
+from src.logger import logger, configurar_logger
+
+
+# ============================================================
+# SPLASH SCREEN
+# ============================================================
+class SplashScreen(QDialog):
+    def __init__(self, gif_path: str, duration_ms: int = 5000, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setModal(False)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignCenter)
+        
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setScaledContents(False)
+        
+        if os.path.exists(gif_path):
+            self.movie = QMovie(gif_path)
+            self.label.setMovie(self.movie)
+            self.movie.start()
+            if self.movie.frameCount() > 0:
+                self.movie.jumpToFrame(0)
+                pixmap = self.movie.currentPixmap()
+                if not pixmap.isNull():
+                    size = pixmap.size()
+                    if size.width() > 0 and size.height() > 0:
+                        self.setFixedSize(size)
+                    else:
+                        self.setFixedSize(400, 300)
+                else:
+                    self.setFixedSize(400, 300)
+            else:
+                self.setFixedSize(400, 300)
+        else:
+            self.label.setText("Carregando...")
+            self.label.setStyleSheet("color: white; font-size: 20px; background-color: rgba(0,0,0,150); padding: 20px; border-radius: 10px;")
+            self.setFixedSize(400, 300)
+        
+        layout.addWidget(self.label)
+        screen = QApplication.primaryScreen().geometry()
+        self.move(screen.center() - self.rect().center())
+        
+        if duration_ms > 0:
+            QTimer.singleShot(duration_ms, self.accept)
+    
+    def closeEvent(self, event):
+        if hasattr(self, 'movie') and self.movie is not None:
+            self.movie.stop()
+        event.accept()
+
+
+def show_splash(gif_path: str, duration_ms: int = 5000) -> SplashScreen:
+    splash = SplashScreen(gif_path, duration_ms)
+    splash.show()
+    QApplication.processEvents()
+    return splash
+
+
+def abrir_dialogo(dialog_class, *args, **kwargs):
+    """Abre um diálogo e retorna (resultado, instância)."""
+    try:
+        logger.info(f"Criando {dialog_class.__name__}...")
+        dialog = dialog_class(*args, **kwargs)
+        # Forçar topo e centralizar
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
+        dialog.setModal(True)
+        screen = QApplication.primaryScreen().geometry()
+        dialog.move(screen.center() - dialog.rect().center())
+        logger.info(f"Exibindo {dialog_class.__name__}...")
+        result = dialog.exec()
+        logger.info(f"{dialog_class.__name__} retornou {result}")
+        return result, dialog
+    except Exception as e:
+        logger.critical(f"Falha ao abrir {dialog_class.__name__}: {e}")
+        logger.critical(traceback.format_exc())
+        QMessageBox.critical(None, "Erro", f"Falha ao abrir {dialog_class.__name__}:\n{str(e)}")
+        return QDialog.Rejected, None
+
+
+def main():
+    configurar_logger()
+    
+    logger.info("="*60)
+    logger.info("SISTEMA DE AUTOMAÇÃO INICIADO")
+    logger.info(f"Versão Python: {sys.version}")
+    logger.info(f"Sistema Operacional: {sys.platform}")
+    logger.info("="*60)
+    
+    try:
+        logger.info("1. Inicializando banco...")
+        # from src.database import inicializar_banco
+        # inicializar_banco(migrar=True)
+        
+        logger.info("2. Criando aplicação...")
+        app = QApplication(sys.argv)
+        
+        icon_path = os.path.join(os.path.dirname(__file__), "sistem.ico")
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
+            logger.info("✅ Ícone carregado.")
+        else:
+            logger.warning(f"⚠️ Ícone não encontrado: {icon_path}")
+        
+        # Splash
+        loading_gif = os.path.join(os.path.dirname(__file__), "loading.gif")
+        if os.path.exists(loading_gif):
+            logger.info("📱 Exibindo splash...")
+            splash = show_splash(loading_gif, 5000)
+            loop = QEventLoop()
+            splash.accepted.connect(loop.quit)
+            if not splash.isVisible():
+                loop.quit()
+            else:
+                loop.exec()
+            logger.info("✅ Splash finalizada.")
+        else:
+            logger.warning(f"⚠️ loading.gif não encontrado.")
+        
+        # Credenciais
+        logger.info("3. Abrindo tela de credenciais...")
+        result_cred, cred_dialog = abrir_dialogo(CredentialSetupDialog)
+        if result_cred != QDialog.Accepted:
+            logger.info("Credenciais canceladas ou erro. Saindo...")
+            sys.exit(0)
+        logger.info("4. Credenciais OK.")
+        
+        # Loop de grupos
+        while True:
+            logger.info("5. Abrindo seleção de grupo...")
+            result_group, group_dialog = abrir_dialogo(GroupSelectionDialog)
+            if result_group != QDialog.Accepted:
+                logger.info("Seleção de grupo cancelada. Saindo...")
+                break
+            
+            grupo = group_dialog.grupo_selecionado if group_dialog else None
+            if not grupo:
+                logger.warning("Nenhum grupo selecionado. Repetindo...")
+                continue
+            
+            logger.info(f"7. Grupo selecionado: {grupo}")
+            
+            # Splash sicredi
+            sicredi_gif = os.path.join(os.path.dirname(__file__), "sicredi.gif")
+            if os.path.exists(sicredi_gif):
+                logger.info("📱 Exibindo splash sicredi...")
+                splash2 = show_splash(sicredi_gif, 5000)
+                loop2 = QEventLoop()
+                splash2.accepted.connect(loop2.quit)
+                if not splash2.isVisible():
+                    loop2.quit()
+                else:
+                    loop2.exec()
+                logger.info("✅ Splash sicredi finalizada.")
+            else:
+                logger.warning(f"⚠️ sicredi.gif não encontrado.")
+            
+            logger.info("8. Abrindo janela principal...")
+            main_window = MainWindow(grupo)
+            main_window.show()
+            main_window.raise_()
+            main_window.activateWindow()
+            logger.info("9. Janela principal mostrada. Entrando no loop...")
+            app.exec()
+            logger.info("10. Janela principal fechada.")
+        
+        logger.info("11. Aplicação finalizada.")
+        
+    except Exception as e:
+        logger.critical(f"ERRO FATAL: {e}")
+        logger.critical(traceback.format_exc())
+        QMessageBox.critical(None, "Erro Fatal", f"Ocorreu um erro inesperado:\n\n{e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
