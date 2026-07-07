@@ -2,16 +2,14 @@ import sys
 import os
 import traceback
 import time
-import ctypes
 from datetime import datetime
 
 # ============================================================
-# LOGGER DE EMERGÊNCIA (escrita imediata em arquivo e console)
+# LOGGER DE EMERGÊNCIA (escrita imediata)
 # ============================================================
 DEBUG_FILE = os.path.join(os.path.dirname(__file__), 'debug.log')
 
 def debug_print(msg):
-    """Escreve mensagem no console e no arquivo debug.log com flush imediato."""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     linha = f"[{timestamp}] {msg}"
     print(linha, flush=True)
@@ -20,28 +18,25 @@ def debug_print(msg):
             f.write(linha + '\n')
             f.flush()
             os.fsync(f.fileno())
-    except Exception as e:
-        print(f"ERRO ao escrever no debug.log: {e}", flush=True)
+    except:
+        pass
 
 # ============================================================
-# IMPORTAÇÕES (com log)
+# IMPORTAÇÕES
 # ============================================================
 debug_print("=== INÍCIO DO SCRIPT ===")
-debug_print(f"Diretório atual: {os.getcwd()}")
+debug_print(f"Diretório: {os.getcwd()}")
 debug_print(f"Python: {sys.version}")
-debug_print(f"Plataforma: {sys.platform}")
 
-# Adicionar src ao path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 debug_print("sys.path modificado")
 
-# Importar módulos com log
 try:
     debug_print("Importando PySide6...")
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout, QPushButton, QWidget
-    from PySide6.QtGui import QIcon, QMovie, QFont, QColor, QPalette
-    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication, QRect
-    debug_print("PySide6 importado com sucesso.")
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout
+    from PySide6.QtGui import QIcon, QMovie
+    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication
+    debug_print("PySide6 importado.")
 except Exception as e:
     debug_print(f"ERRO ao importar PySide6: {e}")
     sys.exit(1)
@@ -51,18 +46,18 @@ try:
     from src.gui.credential_dialog import CredentialSetupDialog
     from src.gui.group_selection import GroupSelectionDialog
     from src.gui.main_window import MainWindow
-    from src.logger import logger, configurar_logger
-    debug_print("Módulos do sistema importados.")
+    from src.logger import configurar_logger
+    debug_print("Módulos importados.")
 except Exception as e:
-    debug_print(f"ERRO ao importar módulos do sistema: {e}")
+    debug_print(f"ERRO ao importar módulos: {e}")
     sys.exit(1)
 
 # ============================================================
-# SPLASH SCREEN (com logging)
+# SPLASH SCREEN
 # ============================================================
 class SplashScreen(QDialog):
     def __init__(self, gif_path: str, duration_ms: int = 5000, parent=None):
-        debug_print(f"Criando SplashScreen: gif={gif_path}, duração={duration_ms}ms")
+        debug_print(f"Criando Splash: {gif_path}")
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -71,18 +66,15 @@ class SplashScreen(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignCenter)
-        
         self.label = QLabel()
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setScaledContents(False)
         
         if os.path.exists(gif_path):
-            debug_print(f"GIF encontrado: {gif_path}")
             try:
                 self.movie = QMovie(gif_path)
                 self.label.setMovie(self.movie)
                 self.movie.start()
-                # Ajusta tamanho
                 if self.movie.frameCount() > 0:
                     self.movie.jumpToFrame(0)
                     pixmap = self.movie.currentPixmap()
@@ -97,12 +89,12 @@ class SplashScreen(QDialog):
                 else:
                     self.setFixedSize(400, 300)
             except Exception as e:
-                debug_print(f"Erro ao carregar GIF: {e}")
+                debug_print(f"Erro GIF: {e}")
                 self.label.setText("Carregando...")
                 self.label.setStyleSheet("color: white; font-size: 20px; background-color: rgba(0,0,0,150); padding: 20px; border-radius: 10px;")
                 self.setFixedSize(400, 300)
         else:
-            debug_print(f"GIF não encontrado: {gif_path}")
+            debug_print("GIF não encontrado.")
             self.label.setText("Carregando...")
             self.label.setStyleSheet("color: white; font-size: 20px; background-color: rgba(0,0,0,150); padding: 20px; border-radius: 10px;")
             self.setFixedSize(400, 300)
@@ -110,21 +102,20 @@ class SplashScreen(QDialog):
         layout.addWidget(self.label)
         screen = QApplication.primaryScreen().geometry()
         self.move(screen.center() - self.rect().center())
-        debug_print("Splash posicionada")
+        debug_print("Splash posicionada.")
         
         if duration_ms > 0:
             QTimer.singleShot(duration_ms, self.accept)
-            debug_print(f"Timer de {duration_ms}ms iniciado")
-    
+            debug_print(f"Timer {duration_ms}ms iniciado.")
+
     def closeEvent(self, event):
-        if hasattr(self, 'movie') and self.movie is not None:
+        if hasattr(self, 'movie') and self.movie:
             self.movie.stop()
-        debug_print("Splash fechada")
+        debug_print("Splash fechada.")
         event.accept()
 
 
-def show_splash(gif_path: str, duration_ms: int = 5000) -> SplashScreen:
-    debug_print(f"show_splash chamado com {gif_path}")
+def show_splash(gif_path: str, duration_ms: int = 5000):
     splash = SplashScreen(gif_path, duration_ms)
     splash.show()
     QApplication.processEvents()
@@ -132,67 +123,56 @@ def show_splash(gif_path: str, duration_ms: int = 5000) -> SplashScreen:
 
 
 # ============================================================
-# FUNÇÃO PARA FORÇAR JANELA A APARECER (MÚLTIPLAS ESTRATÉGIAS)
+# FUNÇÃO PARA FORÇAR VISIBILIDADE COM MÚLTIPLAS ESTRATÉGIAS
 # ============================================================
-def forcar_janela_visivel(dialog, nome_classe, tentativas=5):
-    """Tenta várias estratégias para tornar uma janela visível."""
+def forcar_janela_visivel(dialog, nome_classe):
+    """Força a janela a aparecer usando várias técnicas."""
     debug_print(f"Forçando visibilidade de {nome_classe}...")
     
-    # Estratégia 1: Remover flags problemáticas
+    # 1. Remover flags problemáticas
     dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
     dialog.setModal(True)
     
-    # Estratégia 2: Posicionar no centro da tela primária (absoluto)
+    # 2. Posicionar no centro absoluto
     screen = QApplication.primaryScreen().availableGeometry()
     x = screen.x() + (screen.width() - dialog.width()) // 2
     y = screen.y() + (screen.height() - dialog.height()) // 2
     dialog.move(x, y)
-    debug_print(f"Movido para ({x}, {y})")
+    debug_print(f"Posicionado em ({x}, {y})")
     
-    # Estratégia 3: Mostrar com diferentes métodos
+    # 3. Forçar show() e processar eventos
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
     QApplication.processEvents()
+    debug_print("show() e raise_() chamados.")
     
-    # Estratégia 4: Tentativas repetidas com timers
-    for i in range(tentativas):
+    # 4. Tentar várias vezes com intervalos
+    for i in range(5):
         if dialog.isVisible():
-            debug_print(f"{nome_classe} está visível (tentativa {i+1})")
+            debug_print(f"{nome_classe} visível (tentativa {i+1}).")
             break
-        debug_print(f"Tentativa {i+1}: janela não visível, reaplicando show()...")
+        debug_print(f"Tentativa {i+1}: não visível, reaplicando...")
         dialog.show()
         dialog.raise_()
-        dialog.activateWindow()
         QApplication.processEvents()
-        time.sleep(0.2)
+        time.sleep(0.1)
     
-    # Estratégia 5: Se ainda não visível, tentar showMaximized() e restaurar
+    # 5. Se ainda não visível, tentar maximizar/restaurar
     if not dialog.isVisible():
-        debug_print("Tentando showMaximized() + showNormal()...")
+        debug_print("Não visível. Tentando showMaximized() + showNormal()...")
         dialog.showMaximized()
         QApplication.processEvents()
         time.sleep(0.2)
         dialog.showNormal()
         QApplication.processEvents()
     
-    # Estratégia 6: Último recurso - criar um QLabel de emergência
+    # 6. Verificar novamente
     if not dialog.isVisible():
-        debug_print("CRÍTICO: Janela não aparece. Criando mensagem de emergência.")
-        try:
-            msg = QMessageBox()
-            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
-            msg.setIcon(QMessageBox.Critical)
-            msg.setText(f"A janela {nome_classe} não pôde ser exibida.\n"
-                       f"Por favor, verifique se há outros monitores ou problemas de GPU.\n"
-                       f"O sistema será encerrado.")
-            msg.setStandardButtons(QMessageBox.Ok)
-            msg.exec()
-        except:
-            pass
+        debug_print("CRÍTICO: Janela não aparece após todas as tentativas.")
         return False
     
-    debug_print(f"{nome_classe} forçada a ficar visível.")
+    debug_print(f"{nome_classe} visível com sucesso.")
     return True
 
 
@@ -200,7 +180,6 @@ def forcar_janela_visivel(dialog, nome_classe, tentativas=5):
 # FUNÇÃO PARA ABRIR DIÁLOGO COM GARANTIA DE VISIBILIDADE
 # ============================================================
 def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
-    """Abre um diálogo e garante que ele apareça, com timeout e fallback."""
     nome_classe = dialog_class.__name__
     debug_print(f"-> Abrindo {nome_classe} com garantia...")
     
@@ -209,34 +188,40 @@ def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
         dialog = dialog_class(*args, **kwargs)
         debug_print(f"Instância criada: {dialog}")
         
-        # Forçar visibilidade
+        # Forçar visibilidade antes do exec()
         if not forcar_janela_visivel(dialog, nome_classe):
-            debug_print(f"Falha ao forçar visibilidade de {nome_classe}. Retornando Rejected.")
+            debug_print(f"Falha ao forçar visibilidade de {nome_classe}. Tentando fallback...")
+            # Fallback: mostrar um QMessageBox de erro
+            msg = QMessageBox()
+            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText(f"Não foi possível exibir {nome_classe}.\n"
+                       f"O sistema será encerrado.\n"
+                       f"Verifique o debug.log para detalhes.")
+            msg.exec()
             return QDialog.Rejected, dialog
         
-        # Executar o diálogo (com timer de keep-alive)
-        debug_print(f"Chamando exec() em {nome_classe}...")
-        
-        # Timer para manter a janela ativa (evita que seja enterrada)
-        def keep_alive():
+        # Criar um timer que mantém a janela no topo enquanto estiver aberta
+        def manter_top():
             if dialog.isVisible():
                 dialog.raise_()
                 dialog.activateWindow()
-        timer = QTimer()
-        timer.timeout.connect(keep_alive)
-        timer.start(300)  # a cada 300ms
         
+        timer = QTimer()
+        timer.timeout.connect(manter_top)
+        timer.start(200)  # a cada 200ms
+        
+        debug_print(f"Chamando exec() em {nome_classe}...")
         result = dialog.exec()
         timer.stop()
         debug_print(f"exec() retornou {result} para {nome_classe}")
         return result, dialog
         
     except Exception as e:
-        debug_print(f"EXCEÇÃO ao abrir {nome_classe}: {str(e)}")
+        debug_print(f"EXCEÇÃO em {nome_classe}: {str(e)}")
         debug_print(traceback.format_exc())
         try:
-            QMessageBox.critical(None, f"Erro ao abrir {nome_classe}", 
-                f"Ocorreu um erro:\n{str(e)}\n\nVerifique debug.log para mais detalhes.")
+            QMessageBox.critical(None, f"Erro em {nome_classe}", str(e))
         except:
             pass
         return QDialog.Rejected, None
@@ -246,45 +231,40 @@ def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
 # VERIFICAÇÃO DE PERMISSÕES
 # ============================================================
 def verificar_permissoes():
-    """Verifica se as pastas necessárias são graváveis."""
-    debug_print("Verificando permissões de pastas...")
-    
-    # Pasta de dados do usuário
+    debug_print("Verificando permissões...")
     appdata = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
     try:
         os.makedirs(appdata, exist_ok=True)
-        test_file = os.path.join(appdata, 'test_write.tmp')
-        with open(test_file, 'w') as f:
+        test = os.path.join(appdata, 'test.tmp')
+        with open(test, 'w') as f:
             f.write('test')
-        os.remove(test_file)
-        debug_print(f"Pasta {appdata} é gravável.")
+        os.remove(test)
+        debug_print(f"Pasta {appdata} gravável.")
     except Exception as e:
-        debug_print(f"ERRO: Pasta {appdata} não é gravável: {e}")
+        debug_print(f"ERRO: {appdata} não gravável: {e}")
         return False
     
-    # Pasta de logs local (onde o executável está)
-    logs_dir = os.path.join(os.getcwd(), 'Logs')
+    logs = os.path.join(os.getcwd(), 'Logs')
     try:
-        os.makedirs(logs_dir, exist_ok=True)
-        test_file = os.path.join(logs_dir, 'test_write.tmp')
-        with open(test_file, 'w') as f:
+        os.makedirs(logs, exist_ok=True)
+        test = os.path.join(logs, 'test.tmp')
+        with open(test, 'w') as f:
             f.write('test')
-        os.remove(test_file)
-        debug_print(f"Pasta {logs_dir} é gravável.")
+        os.remove(test)
+        debug_print(f"Pasta {logs} gravável.")
     except Exception as e:
-        debug_print(f"ERRO: Pasta {logs_dir} não é gravável: {e}")
+        debug_print(f"ERRO: {logs} não gravável: {e}")
         return False
     
     return True
 
 
 # ============================================================
-# FUNÇÃO PRINCIPAL
+# MAIN
 # ============================================================
 def main():
     debug_print("=== MAIN INICIADO ===")
     
-    # Configurar o logger oficial (também usado pelo sistema)
     try:
         configurar_logger()
         debug_print("Logger configurado.")
@@ -292,17 +272,15 @@ def main():
         debug_print(f"Erro ao configurar logger: {e}")
     
     try:
-        # Verificar permissões das pastas
         verificar_permissoes()
         
-        # Criar QApplication
         debug_print("Criando QApplication...")
         app = QApplication(sys.argv)
-        debug_print(f"QApplication criada: {app}")
+        debug_print(f"QApplication criada.")
         
-        # === FORÇAR USO DE SOFTWARE RENDERER (evita problemas gráficos em terminais remotos) ===
+        # Usar software renderer para evitar problemas em terminais remotos
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
-        debug_print("Atributo AA_UseSoftwareOpenGL aplicado.")
+        debug_print("AA_UseSoftwareOpenGL aplicado.")
         
         # Ícone
         icon_path = os.path.join(os.path.dirname(__file__), "sistem.ico")
@@ -312,42 +290,39 @@ def main():
         else:
             debug_print(f"Ícone não encontrado: {icon_path}")
         
-        # ===== SPLASH 1 =====
+        # Splash
         loading_gif = os.path.join(os.path.dirname(__file__), "loading.gif")
-        debug_print(f"Buscando loading.gif em: {loading_gif}")
         if os.path.exists(loading_gif):
-            debug_print("Exibindo loading.gif...")
+            debug_print("Exibindo splash...")
             splash = show_splash(loading_gif, 5000)
             loop = QEventLoop()
             splash.accepted.connect(loop.quit)
-            debug_print("Aguardando splash fechar...")
             if not splash.isVisible():
                 loop.quit()
-                debug_print("Splash já não está visível.")
             else:
                 loop.exec()
-                debug_print("Splash fechada pelo timer.")
+            debug_print("Splash finalizada.")
         else:
-            debug_print("loading.gif não encontrado. Continuando sem splash.")
+            debug_print("loading.gif não encontrado.")
         
-        # ===== DIÁLOGO DE CREDENCIAIS (com garantia) =====
-        debug_print("Abrindo diálogo de credenciais...")
+        # Credenciais
+        debug_print("Abrindo CredentialSetupDialog...")
         result_cred, cred_dialog = abrir_dialogo_com_garantia(CredentialSetupDialog)
         if result_cred != QDialog.Accepted:
-            debug_print("Credenciais canceladas ou erro. Encerrando.")
+            debug_print("Credenciais canceladas/erro. Encerrando.")
             try:
-                QMessageBox.information(None, "Informação", "Credenciais não configuradas. O sistema será encerrado.")
+                QMessageBox.information(None, "Info", "Credenciais não configuradas. Sistema encerrado.")
             except:
                 pass
             sys.exit(0)
         debug_print("Credenciais OK.")
         
-        # ===== LOOP DE GRUPOS =====
+        # Loop de grupos
         while True:
             debug_print("Abrindo seleção de grupo...")
             result_group, group_dialog = abrir_dialogo_com_garantia(GroupSelectionDialog)
             if result_group != QDialog.Accepted:
-                debug_print("Seleção de grupo cancelada. Encerrando.")
+                debug_print("Grupo cancelado. Encerrando.")
                 break
             
             grupo = group_dialog.grupo_selecionado if group_dialog else None
@@ -355,9 +330,9 @@ def main():
                 debug_print("Nenhum grupo selecionado. Repetindo...")
                 continue
             
-            debug_print(f"Grupo selecionado: {grupo}")
+            debug_print(f"Grupo: {grupo}")
             
-            # ===== SPLASH SICREDI =====
+            # Splash sicredi
             sicredi_gif = os.path.join(os.path.dirname(__file__), "sicredi.gif")
             if os.path.exists(sicredi_gif):
                 debug_print("Exibindo sicredi.gif...")
@@ -368,16 +343,15 @@ def main():
                     loop2.quit()
                 else:
                     loop2.exec()
-                debug_print("Splash sicredi fechada.")
+                debug_print("Splash sicredi finalizada.")
             else:
                 debug_print("sicredi.gif não encontrado.")
             
-            # ===== JANELA PRINCIPAL =====
+            # MainWindow
             debug_print("Criando MainWindow...")
             try:
                 main_window = MainWindow(grupo)
                 debug_print("MainWindow criada.")
-                # Garantir visibilidade também da MainWindow
                 forcar_janela_visivel(main_window, "MainWindow")
                 main_window.show()
                 main_window.raise_()
@@ -389,7 +363,7 @@ def main():
                 debug_print(f"Exceção na MainWindow: {e}")
                 debug_print(traceback.format_exc())
                 try:
-                    QMessageBox.critical(None, "Erro", f"Falha ao abrir janela principal:\n{str(e)}")
+                    QMessageBox.critical(None, "Erro", f"Falha ao abrir MainWindow:\n{str(e)}")
                 except:
                     pass
                 break
@@ -400,7 +374,7 @@ def main():
         debug_print(f"ERRO FATAL: {e}")
         debug_print(traceback.format_exc())
         try:
-            QMessageBox.critical(None, "Erro Fatal", f"Ocorreu um erro inesperado:\n\n{e}")
+            QMessageBox.critical(None, "Erro Fatal", str(e))
         except:
             pass
         sys.exit(1)
