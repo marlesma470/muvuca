@@ -38,9 +38,9 @@ debug_print("sys.path modificado")
 # Importar módulos com log
 try:
     debug_print("Importando PySide6...")
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout, QPushButton
-    from PySide6.QtGui import QIcon, QMovie, QFont
-    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout, QPushButton, QWidget
+    from PySide6.QtGui import QIcon, QMovie, QFont, QColor, QPalette
+    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication, QRect
     debug_print("PySide6 importado com sucesso.")
 except Exception as e:
     debug_print(f"ERRO ao importar PySide6: {e}")
@@ -132,62 +132,100 @@ def show_splash(gif_path: str, duration_ms: int = 5000) -> SplashScreen:
 
 
 # ============================================================
-# FUNÇÃO PARA ABRIR DIÁLOGO COM ESTRATÉGIAS MÚLTIPLAS
+# FUNÇÃO PARA FORÇAR JANELA A APARECER (MÚLTIPLAS ESTRATÉGIAS)
 # ============================================================
-def abrir_dialogo_com_timeout(dialog_class, *args, **kwargs):
-    """Tenta abrir um diálogo com múltiplas estratégias para garantir visibilidade."""
+def forcar_janela_visivel(dialog, nome_classe, tentativas=5):
+    """Tenta várias estratégias para tornar uma janela visível."""
+    debug_print(f"Forçando visibilidade de {nome_classe}...")
+    
+    # Estratégia 1: Remover flags problemáticas
+    dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+    dialog.setModal(True)
+    
+    # Estratégia 2: Posicionar no centro da tela primária (absoluto)
+    screen = QApplication.primaryScreen().availableGeometry()
+    x = screen.x() + (screen.width() - dialog.width()) // 2
+    y = screen.y() + (screen.height() - dialog.height()) // 2
+    dialog.move(x, y)
+    debug_print(f"Movido para ({x}, {y})")
+    
+    # Estratégia 3: Mostrar com diferentes métodos
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    QApplication.processEvents()
+    
+    # Estratégia 4: Tentativas repetidas com timers
+    for i in range(tentativas):
+        if dialog.isVisible():
+            debug_print(f"{nome_classe} está visível (tentativa {i+1})")
+            break
+        debug_print(f"Tentativa {i+1}: janela não visível, reaplicando show()...")
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        QApplication.processEvents()
+        time.sleep(0.2)
+    
+    # Estratégia 5: Se ainda não visível, tentar showMaximized() e restaurar
+    if not dialog.isVisible():
+        debug_print("Tentando showMaximized() + showNormal()...")
+        dialog.showMaximized()
+        QApplication.processEvents()
+        time.sleep(0.2)
+        dialog.showNormal()
+        QApplication.processEvents()
+    
+    # Estratégia 6: Último recurso - criar um QLabel de emergência
+    if not dialog.isVisible():
+        debug_print("CRÍTICO: Janela não aparece. Criando mensagem de emergência.")
+        try:
+            msg = QMessageBox()
+            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setText(f"A janela {nome_classe} não pôde ser exibida.\n"
+                       f"Por favor, verifique se há outros monitores ou problemas de GPU.\n"
+                       f"O sistema será encerrado.")
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec()
+        except:
+            pass
+        return False
+    
+    debug_print(f"{nome_classe} forçada a ficar visível.")
+    return True
+
+
+# ============================================================
+# FUNÇÃO PARA ABRIR DIÁLOGO COM GARANTIA DE VISIBILIDADE
+# ============================================================
+def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
+    """Abre um diálogo e garante que ele apareça, com timeout e fallback."""
     nome_classe = dialog_class.__name__
-    debug_print(f"-> Tentando abrir {nome_classe}...")
+    debug_print(f"-> Abrindo {nome_classe} com garantia...")
     
     try:
         debug_print(f"Criando instância de {nome_classe}")
         dialog = dialog_class(*args, **kwargs)
         debug_print(f"Instância criada: {dialog}")
         
-        # === ESTRATÉGIAS PARA GARANTIR VISIBILIDADE ===
-        # 1. Remover flags que podem ocultar a janela
-        dialog.setWindowFlags(Qt.Window)  # janela normal, com bordas
-        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
-        dialog.setModal(True)
+        # Forçar visibilidade
+        if not forcar_janela_visivel(dialog, nome_classe):
+            debug_print(f"Falha ao forçar visibilidade de {nome_classe}. Retornando Rejected.")
+            return QDialog.Rejected, dialog
         
-        # 2. Posicionar no centro da tela (garantindo que não fique fora)
-        screen = QApplication.primaryScreen().availableGeometry()
-        x = screen.x() + (screen.width() - dialog.width()) // 2
-        y = screen.y() + (screen.height() - dialog.height()) // 2
-        dialog.move(x, y)
-        debug_print(f"Janela movida para ({x}, {y})")
+        # Executar o diálogo (com timer de keep-alive)
+        debug_print(f"Chamando exec() em {nome_classe}...")
         
-        # 3. Mostrar com diferentes abordagens
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-        QApplication.processEvents()  # força processamento imediato
-        
-        # 4. Verificar se a janela realmente está visível e, se não, forçar reposicionamento
-        if not dialog.isVisible():
-            debug_print("Janela não está visível após show(). Tentando showNormal()...")
-            dialog.showNormal()
-            QApplication.processEvents()
-        
-        # 5. Se ainda assim não estiver visível, tentar maximizar e restaurar
-        if not dialog.isVisible():
-            debug_print("Ainda não visível. Tentando showMaximized() + showNormal()...")
-            dialog.showMaximized()
-            QApplication.processEvents()
-            dialog.showNormal()
-            QApplication.processEvents()
-        
-        debug_print(f"{nome_classe} configurada e exibida. Visível? {dialog.isVisible()}")
-        
-        # 6. Timer para forçar atualização contínua (evita congelamento)
+        # Timer para manter a janela ativa (evita que seja enterrada)
         def keep_alive():
             if dialog.isVisible():
-                QApplication.processEvents()
+                dialog.raise_()
+                dialog.activateWindow()
         timer = QTimer()
         timer.timeout.connect(keep_alive)
-        timer.start(100)  # a cada 100ms
+        timer.start(300)  # a cada 300ms
         
-        # 7. Executar o diálogo
         result = dialog.exec()
         timer.stop()
         debug_print(f"exec() retornou {result} para {nome_classe}")
@@ -292,9 +330,9 @@ def main():
         else:
             debug_print("loading.gif não encontrado. Continuando sem splash.")
         
-        # ===== DIÁLOGO DE CREDENCIAIS =====
+        # ===== DIÁLOGO DE CREDENCIAIS (com garantia) =====
         debug_print("Abrindo diálogo de credenciais...")
-        result_cred, cred_dialog = abrir_dialogo_com_timeout(CredentialSetupDialog)
+        result_cred, cred_dialog = abrir_dialogo_com_garantia(CredentialSetupDialog)
         if result_cred != QDialog.Accepted:
             debug_print("Credenciais canceladas ou erro. Encerrando.")
             try:
@@ -307,7 +345,7 @@ def main():
         # ===== LOOP DE GRUPOS =====
         while True:
             debug_print("Abrindo seleção de grupo...")
-            result_group, group_dialog = abrir_dialogo_com_timeout(GroupSelectionDialog)
+            result_group, group_dialog = abrir_dialogo_com_garantia(GroupSelectionDialog)
             if result_group != QDialog.Accepted:
                 debug_print("Seleção de grupo cancelada. Encerrando.")
                 break
@@ -339,6 +377,8 @@ def main():
             try:
                 main_window = MainWindow(grupo)
                 debug_print("MainWindow criada.")
+                # Garantir visibilidade também da MainWindow
+                forcar_janela_visivel(main_window, "MainWindow")
                 main_window.show()
                 main_window.raise_()
                 main_window.activateWindow()
