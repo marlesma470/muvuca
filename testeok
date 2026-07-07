@@ -2,10 +2,37 @@ import sys
 import os
 import traceback
 import time
+import subprocess
+import tempfile
+import shutil
 from datetime import datetime
+from pathlib import Path
 
 # ============================================================
-# LOGGER DE EMERGÊNCIA (escrita imediata)
+# DETECTAR SE ESTÁ EM UMA PASTA DE REDE
+# ============================================================
+def is_network_path(path):
+    """Verifica se o caminho é uma pasta de rede (UNC ou mapeada)."""
+    try:
+        # Verifica se é UNC
+        if path.startswith('\\\\') or path.startswith('//'):
+            return True
+        # Verifica se é unidade mapeada (Windows)
+        if sys.platform == 'win32':
+            import ctypes.wintypes
+            drive = os.path.splitdrive(path)[0]
+            if drive:
+                # Verifica o tipo de unidade
+                drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive + '\\')
+                # DRIVE_REMOTE = 4
+                if drive_type == 4:
+                    return True
+        return False
+    except:
+        return False
+
+# ============================================================
+# LOGGER DE EMERGÊNCIA
 # ============================================================
 DEBUG_FILE = os.path.join(os.path.dirname(__file__), 'debug.log')
 
@@ -22,15 +49,103 @@ def debug_print(msg):
         pass
 
 # ============================================================
-# IMPORTAÇÕES
+# FUNÇÃO PARA COPIAR EXECUTÁVEL PARA LOCAL E REINICIAR
+# ============================================================
+def relancar_localmente():
+    """Copia o executável para uma pasta temporária local e o reinicia."""
+    debug_print("=== RELANÇAMENTO LOCAL ===")
+    try:
+        # Pasta temporária local
+        temp_dir = os.path.join(os.environ.get('TEMP', tempfile.gettempdir()), 'AutomacaoCustodia_Local')
+        os.makedirs(temp_dir, exist_ok=True)
+        debug_print(f"Pasta temporária local: {temp_dir}")
+        
+        # Caminho do executável atual
+        current_exe = sys.executable if getattr(sys, 'frozen', False) else __file__
+        debug_print(f"Executável atual: {current_exe}")
+        
+        if not os.path.exists(current_exe):
+            debug_print("Executável não encontrado.")
+            return False
+        
+        # Copiar arquivos necessários
+        dest_exe = os.path.join(temp_dir, os.path.basename(current_exe))
+        debug_print(f"Copiando para: {dest_exe}")
+        
+        # Se for um .exe (PyInstaller), copiar apenas ele e os recursos
+        if getattr(sys, 'frozen', False):
+            # Copiar o .exe
+            shutil.copy2(current_exe, dest_exe)
+            # Copiar arquivos auxiliares (GIFs, ícone, etc.)
+            for ext in ['.gif', '.ico']:
+                for file in os.listdir(os.path.dirname(current_exe)):
+                    if file.endswith(ext):
+                        src = os.path.join(os.path.dirname(current_exe), file)
+                        dst = os.path.join(temp_dir, file)
+                        shutil.copy2(src, dst)
+                        debug_print(f"Copiado: {file}")
+        else:
+            # Se for script Python, copiar tudo (simplificado)
+            src_dir = os.path.dirname(current_exe)
+            for item in os.listdir(src_dir):
+                src = os.path.join(src_dir, item)
+                dst = os.path.join(temp_dir, item)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, ignore_dangling_symlinks=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                else:
+                    shutil.copy2(src, dst)
+            debug_print("Código copiado para local.")
+        
+        # Executar o novo processo
+        debug_print(f"Iniciando processo local: {dest_exe}")
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([dest_exe], shell=True)
+        else:
+            subprocess.Popen([sys.executable, dest_exe], shell=True)
+        
+        debug_print("Processo local iniciado. Encerrando instância atual.")
+        return True
+    except Exception as e:
+        debug_print(f"Erro ao relançar localmente: {e}")
+        return False
+
+# ============================================================
+# IMPORTAÇÕES (com log)
 # ============================================================
 debug_print("=== INÍCIO DO SCRIPT ===")
-debug_print(f"Diretório: {os.getcwd()}")
+debug_print(f"Diretório atual: {os.getcwd()}")
 debug_print(f"Python: {sys.version}")
+debug_print(f"Plataforma: {sys.platform}")
 
+# VERIFICAR SE ESTÁ EM REDE
+if is_network_path(os.getcwd()):
+    debug_print("ALERTA: Executando em pasta de rede.")
+    # Se estiver em rede e NÃO for a versão local, relançar
+    if not os.getenv('AUTOMACAO_LOCAL', '0') == '1':
+        debug_print("Relançando a partir de uma pasta local...")
+        if relancar_localmente():
+            debug_print("Relançamento local bem-sucedido. Saindo da instância atual.")
+            sys.exit(0)
+        else:
+            debug_print("Falha no relançamento. Continuando em rede (pode falhar).")
+    else:
+        debug_print("Executando na cópia local (variável AUTOMACAO_LOCAL definida).")
+else:
+    debug_print("Executando em pasta local.")
+
+# Adicionar src ao path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 debug_print("sys.path modificado")
 
+# ============================================================
+# FORÇAR O PLUGIN WINDOWS (evita problemas em rede)
+# ============================================================
+os.environ['QT_QPA_PLATFORM'] = 'windows'
+debug_print("QT_QPA_PLATFORM=windows definido.")
+
+# ============================================================
+# IMPORTAÇÕES DO SISTEMA
+# ============================================================
 try:
     debug_print("Importando PySide6...")
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout
@@ -123,61 +238,7 @@ def show_splash(gif_path: str, duration_ms: int = 5000):
 
 
 # ============================================================
-# FUNÇÃO PARA FORÇAR VISIBILIDADE COM MÚLTIPLAS ESTRATÉGIAS
-# ============================================================
-def forcar_janela_visivel(dialog, nome_classe):
-    """Força a janela a aparecer usando várias técnicas."""
-    debug_print(f"Forçando visibilidade de {nome_classe}...")
-    
-    # 1. Remover flags problemáticas
-    dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-    dialog.setModal(True)
-    
-    # 2. Posicionar no centro absoluto
-    screen = QApplication.primaryScreen().availableGeometry()
-    x = screen.x() + (screen.width() - dialog.width()) // 2
-    y = screen.y() + (screen.height() - dialog.height()) // 2
-    dialog.move(x, y)
-    debug_print(f"Posicionado em ({x}, {y})")
-    
-    # 3. Forçar show() e processar eventos
-    dialog.show()
-    dialog.raise_()
-    dialog.activateWindow()
-    QApplication.processEvents()
-    debug_print("show() e raise_() chamados.")
-    
-    # 4. Tentar várias vezes com intervalos
-    for i in range(5):
-        if dialog.isVisible():
-            debug_print(f"{nome_classe} visível (tentativa {i+1}).")
-            break
-        debug_print(f"Tentativa {i+1}: não visível, reaplicando...")
-        dialog.show()
-        dialog.raise_()
-        QApplication.processEvents()
-        time.sleep(0.1)
-    
-    # 5. Se ainda não visível, tentar maximizar/restaurar
-    if not dialog.isVisible():
-        debug_print("Não visível. Tentando showMaximized() + showNormal()...")
-        dialog.showMaximized()
-        QApplication.processEvents()
-        time.sleep(0.2)
-        dialog.showNormal()
-        QApplication.processEvents()
-    
-    # 6. Verificar novamente
-    if not dialog.isVisible():
-        debug_print("CRÍTICO: Janela não aparece após todas as tentativas.")
-        return False
-    
-    debug_print(f"{nome_classe} visível com sucesso.")
-    return True
-
-
-# ============================================================
-# FUNÇÃO PARA ABRIR DIÁLOGO COM GARANTIA DE VISIBILIDADE
+# FUNÇÃO PARA FORÇAR JANELA VISÍVEL (COM DELAY)
 # ============================================================
 def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
     nome_classe = dialog_class.__name__
@@ -188,20 +249,35 @@ def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
         dialog = dialog_class(*args, **kwargs)
         debug_print(f"Instância criada: {dialog}")
         
-        # Forçar visibilidade antes do exec()
-        if not forcar_janela_visivel(dialog, nome_classe):
-            debug_print(f"Falha ao forçar visibilidade de {nome_classe}. Tentando fallback...")
-            # Fallback: mostrar um QMessageBox de erro
-            msg = QMessageBox()
-            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
-            msg.setIcon(QMessageBox.Critical)
-            msg.setText(f"Não foi possível exibir {nome_classe}.\n"
-                       f"O sistema será encerrado.\n"
-                       f"Verifique o debug.log para detalhes.")
-            msg.exec()
-            return QDialog.Rejected, dialog
+        # Configurar janela
+        dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+        dialog.setModal(True)
         
-        # Criar um timer que mantém a janela no topo enquanto estiver aberta
+        # Centralizar
+        screen = QApplication.primaryScreen().availableGeometry()
+        x = screen.x() + (screen.width() - dialog.width()) // 2
+        y = screen.y() + (screen.height() - dialog.height()) // 2
+        dialog.move(x, y)
+        debug_print(f"Posicionado em ({x}, {y})")
+        
+        # Mostrar com delay (100ms para processamento)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        QApplication.processEvents()
+        debug_print("show() e raise_() chamados.")
+        
+        # Timer de segurança: após 500ms, tentar novamente se não visível
+        def verificar_visibilidade():
+            if not dialog.isVisible():
+                debug_print("Janela não visível após 500ms. Reaplicando show()...")
+                dialog.show()
+                dialog.raise_()
+                QApplication.processEvents()
+        
+        QTimer.singleShot(500, verificar_visibilidade)
+        
+        # Keep-alive timer (mantém no topo)
         def manter_top():
             if dialog.isVisible():
                 dialog.raise_()
@@ -228,38 +304,6 @@ def abrir_dialogo_com_garantia(dialog_class, *args, **kwargs):
 
 
 # ============================================================
-# VERIFICAÇÃO DE PERMISSÕES
-# ============================================================
-def verificar_permissoes():
-    debug_print("Verificando permissões...")
-    appdata = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
-    try:
-        os.makedirs(appdata, exist_ok=True)
-        test = os.path.join(appdata, 'test.tmp')
-        with open(test, 'w') as f:
-            f.write('test')
-        os.remove(test)
-        debug_print(f"Pasta {appdata} gravável.")
-    except Exception as e:
-        debug_print(f"ERRO: {appdata} não gravável: {e}")
-        return False
-    
-    logs = os.path.join(os.getcwd(), 'Logs')
-    try:
-        os.makedirs(logs, exist_ok=True)
-        test = os.path.join(logs, 'test.tmp')
-        with open(test, 'w') as f:
-            f.write('test')
-        os.remove(test)
-        debug_print(f"Pasta {logs} gravável.")
-    except Exception as e:
-        debug_print(f"ERRO: {logs} não gravável: {e}")
-        return False
-    
-    return True
-
-
-# ============================================================
 # MAIN
 # ============================================================
 def main():
@@ -272,13 +316,11 @@ def main():
         debug_print(f"Erro ao configurar logger: {e}")
     
     try:
-        verificar_permissoes()
-        
         debug_print("Criando QApplication...")
         app = QApplication(sys.argv)
-        debug_print(f"QApplication criada.")
+        debug_print("QApplication criada.")
         
-        # Usar software renderer para evitar problemas em terminais remotos
+        # Forçar software renderer (útil em rede)
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
         debug_print("AA_UseSoftwareOpenGL aplicado.")
         
@@ -352,10 +394,15 @@ def main():
             try:
                 main_window = MainWindow(grupo)
                 debug_print("MainWindow criada.")
-                forcar_janela_visivel(main_window, "MainWindow")
-                main_window.show()
-                main_window.raise_()
-                main_window.activateWindow()
+                
+                # Garantir visibilidade
+                dialog = main_window
+                dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+                QApplication.processEvents()
+                
                 debug_print("MainWindow exibida. Entrando no loop de eventos...")
                 app.exec()
                 debug_print("Loop de eventos finalizado.")
