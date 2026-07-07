@@ -132,10 +132,10 @@ def show_splash(gif_path: str, duration_ms: int = 5000) -> SplashScreen:
 
 
 # ============================================================
-# FUNÇÃO PARA ABRIR DIÁLOGO COM TIMEOUT E LOG
+# FUNÇÃO PARA ABRIR DIÁLOGO COM ESTRATÉGIAS MÚLTIPLAS
 # ============================================================
 def abrir_dialogo_com_timeout(dialog_class, *args, **kwargs):
-    """Tenta abrir um diálogo. Se não aparecer em 10 segundos, mostra erro."""
+    """Tenta abrir um diálogo com múltiplas estratégias para garantir visibilidade."""
     nome_classe = dialog_class.__name__
     debug_print(f"-> Tentando abrir {nome_classe}...")
     
@@ -144,30 +144,52 @@ def abrir_dialogo_com_timeout(dialog_class, *args, **kwargs):
         dialog = dialog_class(*args, **kwargs)
         debug_print(f"Instância criada: {dialog}")
         
-        # Configurações da janela
+        # === ESTRATÉGIAS PARA GARANTIR VISIBILIDADE ===
+        # 1. Remover flags que podem ocultar a janela
+        dialog.setWindowFlags(Qt.Window)  # janela normal, com bordas
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
         dialog.setModal(True)
-        screen = QApplication.primaryScreen().geometry()
-        dialog.move(screen.center() - dialog.rect().center())
-        debug_print(f"Janela {nome_classe} configurada (topo, centralizada)")
         
-        # Mostrar explicitamente
+        # 2. Posicionar no centro da tela (garantindo que não fique fora)
+        screen = QApplication.primaryScreen().availableGeometry()
+        x = screen.x() + (screen.width() - dialog.width()) // 2
+        y = screen.y() + (screen.height() - dialog.height()) // 2
+        dialog.move(x, y)
+        debug_print(f"Janela movida para ({x}, {y})")
+        
+        # 3. Mostrar com diferentes abordagens
         dialog.show()
-        QApplication.processEvents()
-        debug_print(f"show() chamado em {nome_classe}")
+        dialog.raise_()
+        dialog.activateWindow()
+        QApplication.processEvents()  # força processamento imediato
         
-        # Timer para verificar se a janela realmente apareceu
-        start_time = time.time()
-        def verificar_visibilidade():
-            if not dialog.isVisible():
-                debug_print(f"ALERTA: {nome_classe} não está visível após 2 segundos.")
-            else:
-                debug_print(f"{nome_classe} está visível.")
-        QTimer.singleShot(2000, verificar_visibilidade)
+        # 4. Verificar se a janela realmente está visível e, se não, forçar reposicionamento
+        if not dialog.isVisible():
+            debug_print("Janela não está visível após show(). Tentando showNormal()...")
+            dialog.showNormal()
+            QApplication.processEvents()
         
-        # Executar
-        debug_print(f"Chamando exec() em {nome_classe}...")
+        # 5. Se ainda assim não estiver visível, tentar maximizar e restaurar
+        if not dialog.isVisible():
+            debug_print("Ainda não visível. Tentando showMaximized() + showNormal()...")
+            dialog.showMaximized()
+            QApplication.processEvents()
+            dialog.showNormal()
+            QApplication.processEvents()
+        
+        debug_print(f"{nome_classe} configurada e exibida. Visível? {dialog.isVisible()}")
+        
+        # 6. Timer para forçar atualização contínua (evita congelamento)
+        def keep_alive():
+            if dialog.isVisible():
+                QApplication.processEvents()
+        timer = QTimer()
+        timer.timeout.connect(keep_alive)
+        timer.start(100)  # a cada 100ms
+        
+        # 7. Executar o diálogo
         result = dialog.exec()
+        timer.stop()
         debug_print(f"exec() retornou {result} para {nome_classe}")
         return result, dialog
         
@@ -180,6 +202,42 @@ def abrir_dialogo_com_timeout(dialog_class, *args, **kwargs):
         except:
             pass
         return QDialog.Rejected, None
+
+
+# ============================================================
+# VERIFICAÇÃO DE PERMISSÕES
+# ============================================================
+def verificar_permissoes():
+    """Verifica se as pastas necessárias são graváveis."""
+    debug_print("Verificando permissões de pastas...")
+    
+    # Pasta de dados do usuário
+    appdata = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
+    try:
+        os.makedirs(appdata, exist_ok=True)
+        test_file = os.path.join(appdata, 'test_write.tmp')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        debug_print(f"Pasta {appdata} é gravável.")
+    except Exception as e:
+        debug_print(f"ERRO: Pasta {appdata} não é gravável: {e}")
+        return False
+    
+    # Pasta de logs local (onde o executável está)
+    logs_dir = os.path.join(os.getcwd(), 'Logs')
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+        test_file = os.path.join(logs_dir, 'test_write.tmp')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        debug_print(f"Pasta {logs_dir} é gravável.")
+    except Exception as e:
+        debug_print(f"ERRO: Pasta {logs_dir} não é gravável: {e}")
+        return False
+    
+    return True
 
 
 # ============================================================
@@ -197,23 +255,16 @@ def main():
     
     try:
         # Verificar permissões das pastas
-        debug_print("Verificando permissões...")
-        appdata = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
-        try:
-            os.makedirs(appdata, exist_ok=True)
-            test_file = os.path.join(appdata, 'test.tmp')
-            with open(test_file, 'w') as f:
-                f.write('test')
-            os.remove(test_file)
-            debug_print(f"Pasta {appdata} gravável.")
-        except Exception as e:
-            debug_print(f"ERRO: Pasta {appdata} NÃO é gravável: {e}")
-            # Tenta continuar, mas pode dar problema
+        verificar_permissoes()
         
         # Criar QApplication
         debug_print("Criando QApplication...")
         app = QApplication(sys.argv)
         debug_print(f"QApplication criada: {app}")
+        
+        # === FORÇAR USO DE SOFTWARE RENDERER (evita problemas gráficos em terminais remotos) ===
+        app.setAttribute(Qt.AA_UseSoftwareOpenGL)
+        debug_print("Atributo AA_UseSoftwareOpenGL aplicado.")
         
         # Ícone
         icon_path = os.path.join(os.path.dirname(__file__), "sistem.ico")
