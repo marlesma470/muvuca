@@ -2,8 +2,6 @@ import sys
 import os
 import traceback
 import time
-import shutil
-import tempfile
 from datetime import datetime
 
 # ============================================================
@@ -27,7 +25,7 @@ def debug_print(msg):
 # IMPORTAÇÕES
 # ============================================================
 debug_print("=== INÍCIO DO SCRIPT ===")
-debug_print(f"Diretório atual: {os.getcwd()}")
+debug_print(f"Diretório: {os.getcwd()}")
 debug_print(f"Python: {sys.version}")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -35,9 +33,9 @@ debug_print("sys.path modificado")
 
 try:
     debug_print("Importando PySide6...")
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout
-    from PySide6.QtGui import QIcon, QMovie
-    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout, QPushButton, QWidget
+    from PySide6.QtGui import QIcon, QMovie, QColor, QPalette
+    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication, QRect
     debug_print("PySide6 importado.")
 except Exception as e:
     debug_print(f"ERRO ao importar PySide6: {e}")
@@ -55,39 +53,7 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================================
-# FUNÇÃO PARA COPIAR RECURSOS PARA PASTA TEMPORÁRIA LOCAL
-# ============================================================
-def copiar_recursos_local():
-    """Copia GIFs e ícone para uma pasta temporária local para evitar latência de rede."""
-    temp_dir = os.path.join(tempfile.gettempdir(), 'AutomacaoCustodia')
-    os.makedirs(temp_dir, exist_ok=True)
-    debug_print(f"Pasta temporária: {temp_dir}")
-    
-    recursos = {
-        'loading.gif': 'loading.gif',
-        'sicredi.gif': 'sicredi.gif',
-        'sistem.ico': 'sistem.ico'
-    }
-    
-    caminhos_locais = {}
-    for nome, arquivo in recursos.items():
-        origem = os.path.join(os.path.dirname(__file__), arquivo)
-        destino = os.path.join(temp_dir, arquivo)
-        if os.path.exists(origem):
-            try:
-                shutil.copy2(origem, destino)
-                debug_print(f"Copiado {arquivo} para {destino}")
-                caminhos_locais[nome] = destino
-            except Exception as e:
-                debug_print(f"Erro ao copiar {arquivo}: {e}")
-                caminhos_locais[nome] = origem  # fallback para origem
-        else:
-            debug_print(f"Arquivo {arquivo} não encontrado na origem.")
-            caminhos_locais[nome] = origem
-    return caminhos_locais, temp_dir
-
-# ============================================================
-# SPLASH SCREEN (USANDO RECURSOS LOCAIS)
+# SPLASH SCREEN
 # ============================================================
 class SplashScreen(QDialog):
     def __init__(self, gif_path: str, duration_ms: int = 5000, parent=None):
@@ -155,64 +121,164 @@ def show_splash(gif_path: str, duration_ms: int = 5000):
     QApplication.processEvents()
     return splash
 
+
 # ============================================================
-# FUNÇÃO PARA ABRIR DIÁLOGO COM TIMEOUT E FALLBACK
+# FUNÇÃO PARA DIAGNÓSTICO DE TELA
 # ============================================================
-def abrir_dialogo_com_timeout(dialog_class, timeout_ms=10000, *args, **kwargs):
-    """Abre um diálogo com timeout. Se demorar mais que timeout_ms, exibe erro e encerra."""
-    nome_classe = dialog_class.__name__
-    debug_print(f"-> Abrindo {nome_classe} com timeout de {timeout_ms}ms...")
+def diagnosticar_telas():
+    """Lista todas as telas disponíveis e suas geometrias."""
+    debug_print("Diagnosticando telas...")
+    screens = QApplication.screens()
+    debug_print(f"Número de telas: {len(screens)}")
+    for i, screen in enumerate(screens):
+        geom = screen.geometry()
+        avail = screen.availableGeometry()
+        debug_print(f"Tela {i}: geometria={geom.x()},{geom.y()} {geom.width()}x{geom.height()}, "
+                   f"disponível={avail.x()},{avail.y()} {avail.width()}x{avail.height()}")
+    if not screens:
+        debug_print("NENHUMA TELA ENCONTRADA!")
+
+
+# ============================================================
+# FUNÇÃO PARA FORÇAR VISIBILIDADE COM FALLBACK
+# ============================================================
+def forcar_janela_visivel(dialog, nome_classe, tentativas=5):
+    """Força a janela a aparecer usando várias técnicas, com fallback."""
+    debug_print(f"Forçando visibilidade de {nome_classe}...")
     
-    try:
-        # Criar instância
-        debug_print(f"Criando instância de {nome_classe}")
-        dialog = dialog_class(*args, **kwargs)
-        debug_print(f"Instância criada: {dialog}")
-        
-        # Configurar janela
-        dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-        dialog.setModal(True)
-        screen = QApplication.primaryScreen().availableGeometry()
-        x = screen.x() + (screen.width() - dialog.width()) // 2
-        y = screen.y() + (screen.height() - dialog.height()) // 2
-        dialog.move(x, y)
-        debug_print(f"Posicionado em ({x}, {y})")
-        
-        # Mostrar janela
+    # Remover flags problemáticas
+    dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+    dialog.setModal(True)
+    
+    # Posicionar no centro da tela primária (absoluto)
+    screen = QApplication.primaryScreen().availableGeometry()
+    x = screen.x() + (screen.width() - dialog.width()) // 2
+    y = screen.y() + (screen.height() - dialog.height()) // 2
+    if x < 0 or y < 0:
+        debug_print(f"Coordenadas negativas ({x}, {y}). Forçando para (0,0)...")
+        x = max(0, x)
+        y = max(0, y)
+    dialog.move(x, y)
+    debug_print(f"Posicionado em ({x}, {y})")
+    
+    # Forçar show() e processar eventos
+    for i in range(tentativas):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
         QApplication.processEvents()
-        debug_print(f"show() chamado em {nome_classe}")
+        time.sleep(0.1)
+        if dialog.isVisible():
+            debug_print(f"{nome_classe} visível (tentativa {i+1}).")
+            break
+        debug_print(f"Tentativa {i+1}: não visível.")
+    
+    # Se não visível, tentar showMaximized() + showNormal()
+    if not dialog.isVisible():
+        debug_print("Não visível. Tentando showMaximized() + showNormal()...")
+        dialog.showMaximized()
+        QApplication.processEvents()
+        time.sleep(0.2)
+        dialog.showNormal()
+        QApplication.processEvents()
+        if dialog.isVisible():
+            debug_print(f"{nome_classe} visível após maximizar/restaurar.")
+    
+    # Se ainda não visível, tentar mover para (0,0)
+    if not dialog.isVisible():
+        debug_print("Ainda não visível. Movendo para (0,0)...")
+        dialog.move(0, 0)
+        dialog.show()
+        QApplication.processEvents()
+        time.sleep(0.2)
+    
+    # Verificar novamente
+    if dialog.isVisible():
+        debug_print(f"{nome_classe} visível com sucesso.")
+        return True
+    else:
+        debug_print(f"CRÍTICO: {nome_classe} NÃO está visível após todas as tentativas.")
+        return False
+
+
+# ============================================================
+# FUNÇÃO PARA ABRIR DIÁLOGO COM TIMEOUT E FALLBACK
+# ============================================================
+def abrir_dialogo_com_fallback(dialog_class, timeout_ms=30000, *args, **kwargs):
+    """
+    Tenta abrir o diálogo. Se falhar, oferece fallback ao usuário.
+    Retorna (resultado, instância).
+    """
+    nome_classe = dialog_class.__name__
+    debug_print(f"-> Abrindo {nome_classe} com fallback...")
+    
+    try:
+        debug_print(f"Criando instância de {nome_classe}")
+        dialog = dialog_class(*args, **kwargs)
+        debug_print(f"Instância criada: {dialog}")
         
-        # Timer para timeout
-        timeout_reached = False
+        # Forçar visibilidade
+        if not forcar_janela_visivel(dialog, nome_classe):
+            debug_print(f"Falha ao forçar visibilidade de {nome_classe}. Oferecendo fallback ao usuário.")
+            # Mostrar mensagem de erro e oferecer opções
+            msg = QMessageBox()
+            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("Erro de exibição")
+            msg.setText(f"Não foi possível exibir a janela '{nome_classe}'.\n"
+                       f"Isso pode ocorrer em ambientes de rede ou RDP.\n\n"
+                       f"O que você deseja fazer?")
+            btn_continuar = msg.addButton("Continuar sem esta janela (fallback)", QMessageBox.AcceptRole)
+            btn_sair = msg.addButton("Sair", QMessageBox.RejectRole)
+            msg.exec()
+            
+            if msg.clickedButton() == btn_continuar:
+                debug_print("Usuário optou por continuar com fallback.")
+                # Retornamos Rejected, mas com um flag especial
+                return QDialog.Rejected, None
+            else:
+                debug_print("Usuário optou por sair.")
+                return QDialog.Rejected, None
         
-        def on_timeout():
-            nonlocal timeout_reached
-            timeout_reached = True
-            debug_print(f"TIMEOUT: {nome_classe} não respondeu em {timeout_ms}ms. Fechando diálogo.")
-            dialog.reject()
+        # Criar timer de timeout
+        debug_print(f"Iniciando timeout de {timeout_ms}ms para {nome_classe}...")
+        dialogo_fechado = False
+        resultado = QDialog.Rejected
+        
+        def timeout_handler():
+            nonlocal dialogo_fechado
+            if not dialogo_fechado and dialog.isVisible():
+                debug_print(f"TIMEOUT: {nome_classe} não respondeu em {timeout_ms}ms. Fechando diálogo.")
+                dialogo_fechado = True
+                dialog.close()
+                QApplication.processEvents()
         
         timer = QTimer()
         timer.setSingleShot(True)
-        timer.timeout.connect(on_timeout)
+        timer.timeout.connect(timeout_handler)
         timer.start(timeout_ms)
         
-        # Executar o diálogo
+        # Timer para manter a janela no topo
+        def manter_top():
+            if dialog.isVisible():
+                dialog.raise_()
+                dialog.activateWindow()
+        
+        timer_top = QTimer()
+        timer_top.timeout.connect(manter_top)
+        timer_top.start(300)
+        
         debug_print(f"Chamando exec() em {nome_classe}...")
         result = dialog.exec()
         timer.stop()
+        timer_top.stop()
+        
         debug_print(f"exec() retornou {result} para {nome_classe}")
         
-        if timeout_reached:
-            debug_print(f"{nome_classe} foi fechado por timeout.")
-            QMessageBox.critical(None, "Erro de tempo", 
-                f"A janela {nome_classe} não pôde ser exibida em tempo hábil.\n"
-                "Verifique a conexão de rede ou a performance do sistema.")
+        if result == QDialog.Accepted:
+            return result, dialog
+        else:
             return QDialog.Rejected, dialog
-        
-        return result, dialog
         
     except Exception as e:
         debug_print(f"EXCEÇÃO em {nome_classe}: {str(e)}")
@@ -222,6 +288,39 @@ def abrir_dialogo_com_timeout(dialog_class, timeout_ms=10000, *args, **kwargs):
         except:
             pass
         return QDialog.Rejected, None
+
+
+# ============================================================
+# VERIFICAÇÃO DE PERMISSÕES
+# ============================================================
+def verificar_permissoes():
+    debug_print("Verificando permissões...")
+    appdata = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
+    try:
+        os.makedirs(appdata, exist_ok=True)
+        test = os.path.join(appdata, 'test.tmp')
+        with open(test, 'w') as f:
+            f.write('test')
+        os.remove(test)
+        debug_print(f"Pasta {appdata} gravável.")
+    except Exception as e:
+        debug_print(f"ERRO: {appdata} não gravável: {e}")
+        return False
+    
+    logs = os.path.join(os.getcwd(), 'Logs')
+    try:
+        os.makedirs(logs, exist_ok=True)
+        test = os.path.join(logs, 'test.tmp')
+        with open(test, 'w') as f:
+            f.write('test')
+        os.remove(test)
+        debug_print(f"Pasta {logs} gravável.")
+    except Exception as e:
+        debug_print(f"ERRO: {logs} não gravável: {e}")
+        return False
+    
+    return True
+
 
 # ============================================================
 # MAIN
@@ -236,28 +335,33 @@ def main():
         debug_print(f"Erro ao configurar logger: {e}")
     
     try:
-        # Copiar recursos para pasta local
-        recursos, temp_dir = copiar_recursos_local()
-        debug_print(f"Recursos copiados para {temp_dir}")
+        verificar_permissoes()
         
         debug_print("Criando QApplication...")
-        app = QApplication(sys.argv)
-        debug_print("QApplication criada.")
+        # Forçar o uso do plugin Windows (evita problemas de plataforma em RDP)
+        os.environ["QT_QPA_PLATFORM"] = "windows"
+        debug_print("QT_QPA_PLATFORM=windows definido.")
         
-        # Software renderer para evitar problemas gráficos em rede
+        app = QApplication(sys.argv)
+        debug_print(f"QApplication criada.")
+        
+        # Usar software renderer para evitar problemas em terminais remotos
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
         debug_print("AA_UseSoftwareOpenGL aplicado.")
         
-        # Ícone (usando local)
-        icon_path = recursos.get('sistem.ico')
+        # Diagnosticar telas
+        diagnosticar_telas()
+        
+        # Ícone
+        icon_path = os.path.join(os.path.dirname(__file__), "sistem.ico")
         if os.path.exists(icon_path):
             app.setWindowIcon(QIcon(icon_path))
             debug_print("Ícone carregado.")
         else:
             debug_print(f"Ícone não encontrado: {icon_path}")
         
-        # Splash (usando local)
-        loading_gif = recursos.get('loading.gif')
+        # Splash
+        loading_gif = os.path.join(os.path.dirname(__file__), "loading.gif")
         if os.path.exists(loading_gif):
             debug_print("Exibindo splash...")
             splash = show_splash(loading_gif, 5000)
@@ -271,9 +375,9 @@ def main():
         else:
             debug_print("loading.gif não encontrado.")
         
-        # Credenciais (com timeout de 10 segundos)
+        # Credenciais (com fallback)
         debug_print("Abrindo CredentialSetupDialog...")
-        result_cred, cred_dialog = abrir_dialogo_com_timeout(CredentialSetupDialog, 10000)
+        result_cred, cred_dialog = abrir_dialogo_com_fallback(CredentialSetupDialog, timeout_ms=20000)
         if result_cred != QDialog.Accepted:
             debug_print("Credenciais canceladas/erro. Encerrando.")
             try:
@@ -286,7 +390,7 @@ def main():
         # Loop de grupos
         while True:
             debug_print("Abrindo seleção de grupo...")
-            result_group, group_dialog = abrir_dialogo_com_timeout(GroupSelectionDialog, 10000)
+            result_group, group_dialog = abrir_dialogo_com_fallback(GroupSelectionDialog, timeout_ms=20000)
             if result_group != QDialog.Accepted:
                 debug_print("Grupo cancelado. Encerrando.")
                 break
@@ -298,8 +402,8 @@ def main():
             
             debug_print(f"Grupo: {grupo}")
             
-            # Splash sicredi (usando local)
-            sicredi_gif = recursos.get('sicredi.gif')
+            # Splash sicredi
+            sicredi_gif = os.path.join(os.path.dirname(__file__), "sicredi.gif")
             if os.path.exists(sicredi_gif):
                 debug_print("Exibindo sicredi.gif...")
                 splash2 = show_splash(sicredi_gif, 5000)
@@ -313,16 +417,15 @@ def main():
             else:
                 debug_print("sicredi.gif não encontrado.")
             
-            # MainWindow (com timeout)
+            # MainWindow
             debug_print("Criando MainWindow...")
             try:
                 main_window = MainWindow(grupo)
                 debug_print("MainWindow criada.")
-                # Forçar visibilidade
+                forcar_janela_visivel(main_window, "MainWindow")
                 main_window.show()
                 main_window.raise_()
                 main_window.activateWindow()
-                QApplication.processEvents()
                 debug_print("MainWindow exibida. Entrando no loop de eventos...")
                 app.exec()
                 debug_print("Loop de eventos finalizado.")
