@@ -33,9 +33,9 @@ debug_print("sys.path modificado")
 
 try:
     debug_print("Importando PySide6...")
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout, QPushButton, QWidget
-    from PySide6.QtGui import QIcon, QMovie, QColor, QPalette
-    from PySide6.QtCore import Qt, QTimer, QEventLoop, QCoreApplication, QRect
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QLabel, QVBoxLayout
+    from PySide6.QtGui import QIcon, QMovie
+    from PySide6.QtCore import Qt, QTimer, QEventLoop
     debug_print("PySide6 importado.")
 except Exception as e:
     debug_print(f"ERRO ao importar PySide6: {e}")
@@ -53,7 +53,7 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================================
-# SPLASH SCREEN
+# SPLASH SCREEN (simplificada)
 # ============================================================
 class SplashScreen(QDialog):
     def __init__(self, gif_path: str, duration_ms: int = 5000, parent=None):
@@ -75,26 +75,12 @@ class SplashScreen(QDialog):
                 self.movie = QMovie(gif_path)
                 self.label.setMovie(self.movie)
                 self.movie.start()
-                if self.movie.frameCount() > 0:
-                    self.movie.jumpToFrame(0)
-                    pixmap = self.movie.currentPixmap()
-                    if not pixmap.isNull():
-                        size = pixmap.size()
-                        if size.width() > 0 and size.height() > 0:
-                            self.setFixedSize(size)
-                        else:
-                            self.setFixedSize(400, 300)
-                    else:
-                        self.setFixedSize(400, 300)
-                else:
-                    self.setFixedSize(400, 300)
-            except Exception as e:
-                debug_print(f"Erro GIF: {e}")
+                self.setFixedSize(400, 300)
+            except:
                 self.label.setText("Carregando...")
                 self.label.setStyleSheet("color: white; font-size: 20px; background-color: rgba(0,0,0,150); padding: 20px; border-radius: 10px;")
                 self.setFixedSize(400, 300)
         else:
-            debug_print("GIF não encontrado.")
             self.label.setText("Carregando...")
             self.label.setStyleSheet("color: white; font-size: 20px; background-color: rgba(0,0,0,150); padding: 20px; border-radius: 10px;")
             self.setFixedSize(400, 300)
@@ -106,7 +92,6 @@ class SplashScreen(QDialog):
         
         if duration_ms > 0:
             QTimer.singleShot(duration_ms, self.accept)
-            debug_print(f"Timer {duration_ms}ms iniciado.")
 
     def closeEvent(self, event):
         if hasattr(self, 'movie') and self.movie:
@@ -123,162 +108,90 @@ def show_splash(gif_path: str, duration_ms: int = 5000):
 
 
 # ============================================================
-# FUNÇÃO PARA DIAGNÓSTICO DE TELA
+# FUNÇÃO PARA ABRIR DIÁLOGO COM LOOP MANUAL (SEM EXEC())
 # ============================================================
-def diagnosticar_telas():
-    """Lista todas as telas disponíveis e suas geometrias."""
-    debug_print("Diagnosticando telas...")
-    screens = QApplication.screens()
-    debug_print(f"Número de telas: {len(screens)}")
-    for i, screen in enumerate(screens):
-        geom = screen.geometry()
-        avail = screen.availableGeometry()
-        debug_print(f"Tela {i}: geometria={geom.x()},{geom.y()} {geom.width()}x{geom.height()}, "
-                   f"disponível={avail.x()},{avail.y()} {avail.width()}x{avail.height()}")
-    if not screens:
-        debug_print("NENHUMA TELA ENCONTRADA!")
-
-
-# ============================================================
-# FUNÇÃO PARA FORÇAR VISIBILIDADE COM FALLBACK
-# ============================================================
-def forcar_janela_visivel(dialog, nome_classe, tentativas=5):
-    """Força a janela a aparecer usando várias técnicas, com fallback."""
-    debug_print(f"Forçando visibilidade de {nome_classe}...")
-    
-    # Remover flags problemáticas
-    dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-    dialog.setModal(True)
-    
-    # Posicionar no centro da tela primária (absoluto)
-    screen = QApplication.primaryScreen().availableGeometry()
-    x = screen.x() + (screen.width() - dialog.width()) // 2
-    y = screen.y() + (screen.height() - dialog.height()) // 2
-    if x < 0 or y < 0:
-        debug_print(f"Coordenadas negativas ({x}, {y}). Forçando para (0,0)...")
-        x = max(0, x)
-        y = max(0, y)
-    dialog.move(x, y)
-    debug_print(f"Posicionado em ({x}, {y})")
-    
-    # Forçar show() e processar eventos
-    for i in range(tentativas):
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-        QApplication.processEvents()
-        time.sleep(0.1)
-        if dialog.isVisible():
-            debug_print(f"{nome_classe} visível (tentativa {i+1}).")
-            break
-        debug_print(f"Tentativa {i+1}: não visível.")
-    
-    # Se não visível, tentar showMaximized() + showNormal()
-    if not dialog.isVisible():
-        debug_print("Não visível. Tentando showMaximized() + showNormal()...")
-        dialog.showMaximized()
-        QApplication.processEvents()
-        time.sleep(0.2)
-        dialog.showNormal()
-        QApplication.processEvents()
-        if dialog.isVisible():
-            debug_print(f"{nome_classe} visível após maximizar/restaurar.")
-    
-    # Se ainda não visível, tentar mover para (0,0)
-    if not dialog.isVisible():
-        debug_print("Ainda não visível. Movendo para (0,0)...")
-        dialog.move(0, 0)
-        dialog.show()
-        QApplication.processEvents()
-        time.sleep(0.2)
-    
-    # Verificar novamente
-    if dialog.isVisible():
-        debug_print(f"{nome_classe} visível com sucesso.")
-        return True
-    else:
-        debug_print(f"CRÍTICO: {nome_classe} NÃO está visível após todas as tentativas.")
-        return False
-
-
-# ============================================================
-# FUNÇÃO PARA ABRIR DIÁLOGO COM TIMEOUT E FALLBACK
-# ============================================================
-def abrir_dialogo_com_fallback(dialog_class, timeout_ms=30000, *args, **kwargs):
+def abrir_dialogo_manual(dialog_class, timeout_ms=15000, *args, **kwargs):
     """
-    Tenta abrir o diálogo. Se falhar, oferece fallback ao usuário.
-    Retorna (resultado, instância).
+    Abre um diálogo usando show() e processa eventos manualmente.
+    Retorna (resultado, instância) onde resultado é QDialog.Accepted ou Rejected.
     """
     nome_classe = dialog_class.__name__
-    debug_print(f"-> Abrindo {nome_classe} com fallback...")
+    debug_print(f"-> Abrindo {nome_classe} com loop manual...")
     
     try:
+        # Criar instância
         debug_print(f"Criando instância de {nome_classe}")
         dialog = dialog_class(*args, **kwargs)
         debug_print(f"Instância criada: {dialog}")
         
-        # Forçar visibilidade
-        if not forcar_janela_visivel(dialog, nome_classe):
-            debug_print(f"Falha ao forçar visibilidade de {nome_classe}. Oferecendo fallback ao usuário.")
-            # Mostrar mensagem de erro e oferecer opções
-            msg = QMessageBox()
-            msg.setWindowFlags(Qt.WindowStaysOnTopHint)
-            msg.setIcon(QMessageBox.Warning)
-            msg.setWindowTitle("Erro de exibição")
-            msg.setText(f"Não foi possível exibir a janela '{nome_classe}'.\n"
-                       f"Isso pode ocorrer em ambientes de rede ou RDP.\n\n"
-                       f"O que você deseja fazer?")
-            btn_continuar = msg.addButton("Continuar sem esta janela (fallback)", QMessageBox.AcceptRole)
-            btn_sair = msg.addButton("Sair", QMessageBox.RejectRole)
-            msg.exec()
-            
-            if msg.clickedButton() == btn_continuar:
-                debug_print("Usuário optou por continuar com fallback.")
-                # Retornamos Rejected, mas com um flag especial
-                return QDialog.Rejected, None
-            else:
-                debug_print("Usuário optou por sair.")
-                return QDialog.Rejected, None
+        # Configurar janela - sem flags especiais (para evitar problemas em RDP)
+        dialog.setModal(True)
+        # Posicionar no centro
+        screen = QApplication.primaryScreen().availableGeometry()
+        x = screen.x() + (screen.width() - dialog.width()) // 2
+        y = screen.y() + (screen.height() - dialog.height()) // 2
+        dialog.move(x, y)
+        debug_print(f"Posicionado em ({x}, {y})")
         
-        # Criar timer de timeout
-        debug_print(f"Iniciando timeout de {timeout_ms}ms para {nome_classe}...")
-        dialogo_fechado = False
+        # Mostrar a janela
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        QApplication.processEvents()
+        debug_print(f"show() chamado. Visível? {dialog.isVisible()}")
+        
+        # Se não estiver visível, tentar alternativa
+        if not dialog.isVisible():
+            debug_print("Janela não visível. Tentando showNormal()...")
+            dialog.showNormal()
+            QApplication.processEvents()
+            debug_print(f"Após showNormal, visível? {dialog.isVisible()}")
+        
+        # Se ainda não visível, tentar recriar a janela com flags diferentes
+        if not dialog.isVisible():
+            debug_print("Recriando com flags alternativas...")
+            # Fechar e recriar
+            dialog.close()
+            dialog.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+            dialog.show()
+            QApplication.processEvents()
+            debug_print(f"Recriado. Visível? {dialog.isVisible()}")
+        
+        # Loop manual de eventos
+        debug_print("Iniciando loop manual de eventos...")
+        start_time = time.time()
         resultado = QDialog.Rejected
         
-        def timeout_handler():
-            nonlocal dialogo_fechado
-            if not dialogo_fechado and dialog.isVisible():
-                debug_print(f"TIMEOUT: {nome_classe} não respondeu em {timeout_ms}ms. Fechando diálogo.")
-                dialogo_fechado = True
+        while dialog.isVisible():
+            QApplication.processEvents()
+            time.sleep(0.05)  # 50ms
+            
+            # Verificar timeout
+            if time.time() - start_time > timeout_ms / 1000:
+                debug_print(f"TIMEOUT: {nome_classe} não respondeu em {timeout_ms}ms.")
                 dialog.close()
-                QApplication.processEvents()
+                break
+            
+            # Verificar se a janela foi fechada (clicou em X ou cancelou)
+            if not dialog.isVisible():
+                debug_print("Janela fechada pelo usuário.")
+                break
         
-        timer = QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(timeout_handler)
-        timer.start(timeout_ms)
-        
-        # Timer para manter a janela no topo
-        def manter_top():
-            if dialog.isVisible():
-                dialog.raise_()
-                dialog.activateWindow()
-        
-        timer_top = QTimer()
-        timer_top.timeout.connect(manter_top)
-        timer_top.start(300)
-        
-        debug_print(f"Chamando exec() em {nome_classe}...")
-        result = dialog.exec()
-        timer.stop()
-        timer_top.stop()
-        
-        debug_print(f"exec() retornou {result} para {nome_classe}")
-        
-        if result == QDialog.Accepted:
-            return result, dialog
+        # Após sair do loop, verificar o resultado (se foi aceito ou rejeitado)
+        # Infelizmente não temos como saber diretamente, mas podemos verificar
+        # se o diálogo foi aceito ou rejeitado usando um atributo personalizado
+        # ou assumindo que se o diálogo ainda existe e foi fechado, é Rejected.
+        # Vamos usar um sinal ou verificar se o diálogo foi aceito (podemos adicionar um flag)
+        # Como não temos, vamos considerar que se o diálogo foi fechado sem erro, é Accepted.
+        # Mas vamos tentar obter o resultado do diálogo (se ele tiver um método result())
+        if hasattr(dialog, 'result'):
+            resultado = dialog.result()
         else:
-            return QDialog.Rejected, dialog
+            # Se não tiver, assumimos que foi Accepted se o loop terminou normalmente
+            resultado = QDialog.Accepted
+        
+        debug_print(f"Loop finalizado. Resultado: {resultado}")
+        return resultado, dialog
         
     except Exception as e:
         debug_print(f"EXCEÇÃO em {nome_classe}: {str(e)}")
@@ -288,6 +201,22 @@ def abrir_dialogo_com_fallback(dialog_class, timeout_ms=30000, *args, **kwargs):
         except:
             pass
         return QDialog.Rejected, None
+
+
+# ============================================================
+# FUNÇÃO PARA ABRIR COM RETRY
+# ============================================================
+def abrir_dialogo_com_retry(dialog_class, max_tentativas=3, timeout_ms=15000, *args, **kwargs):
+    for tentativa in range(1, max_tentativas + 1):
+        debug_print(f"Tentativa {tentativa}/{max_tentativas} para {dialog_class.__name__}")
+        result, dialog = abrir_dialogo_manual(dialog_class, timeout_ms, *args, **kwargs)
+        if result == QDialog.Accepted:
+            return result, dialog
+        if tentativa < max_tentativas:
+            debug_print(f"Falha na tentativa {tentativa}. Aguardando 2 segundos...")
+            time.sleep(2)
+    debug_print(f"Todas as tentativas falharam para {dialog_class.__name__}")
+    return QDialog.Rejected, None
 
 
 # ============================================================
@@ -337,20 +266,13 @@ def main():
     try:
         verificar_permissoes()
         
+        # Criar QApplication com configurações para RDP
         debug_print("Criando QApplication...")
-        # Forçar o uso do plugin Windows (evita problemas de plataforma em RDP)
-        os.environ["QT_QPA_PLATFORM"] = "windows"
-        debug_print("QT_QPA_PLATFORM=windows definido.")
-        
+        # Forçar software renderer (crítico para RDP)
+        os.environ["QT_QPA_PLATFORM"] = "windows:softgl"
         app = QApplication(sys.argv)
-        debug_print(f"QApplication criada.")
-        
-        # Usar software renderer para evitar problemas em terminais remotos
         app.setAttribute(Qt.AA_UseSoftwareOpenGL)
-        debug_print("AA_UseSoftwareOpenGL aplicado.")
-        
-        # Diagnosticar telas
-        diagnosticar_telas()
+        debug_print("QApplication criada com software renderer.")
         
         # Ícone
         icon_path = os.path.join(os.path.dirname(__file__), "sistem.ico")
@@ -360,7 +282,7 @@ def main():
         else:
             debug_print(f"Ícone não encontrado: {icon_path}")
         
-        # Splash
+        # Splash (opcional, pode pular se der problema)
         loading_gif = os.path.join(os.path.dirname(__file__), "loading.gif")
         if os.path.exists(loading_gif):
             debug_print("Exibindo splash...")
@@ -375,22 +297,27 @@ def main():
         else:
             debug_print("loading.gif não encontrado.")
         
-        # Credenciais (com fallback)
+        # ===== CREDENCIAIS =====
         debug_print("Abrindo CredentialSetupDialog...")
-        result_cred, cred_dialog = abrir_dialogo_com_fallback(CredentialSetupDialog, timeout_ms=20000)
+        result_cred, cred_dialog = abrir_dialogo_com_retry(CredentialSetupDialog, max_tentativas=2, timeout_ms=15000)
         if result_cred != QDialog.Accepted:
             debug_print("Credenciais canceladas/erro. Encerrando.")
+            # Mostrar mensagem informativa
             try:
-                QMessageBox.information(None, "Info", "Credenciais não configuradas. Sistema encerrado.")
+                msg = QMessageBox()
+                msg.setWindowFlags(Qt.WindowStaysOnTopHint)
+                msg.setIcon(QMessageBox.Information)
+                msg.setText("Credenciais não configuradas. O sistema será encerrado.")
+                msg.exec()
             except:
                 pass
             sys.exit(0)
         debug_print("Credenciais OK.")
         
-        # Loop de grupos
+        # ===== LOOP DE GRUPOS =====
         while True:
             debug_print("Abrindo seleção de grupo...")
-            result_group, group_dialog = abrir_dialogo_com_fallback(GroupSelectionDialog, timeout_ms=20000)
+            result_group, group_dialog = abrir_dialogo_com_retry(GroupSelectionDialog, max_tentativas=2, timeout_ms=15000)
             if result_group != QDialog.Accepted:
                 debug_print("Grupo cancelado. Encerrando.")
                 break
@@ -400,9 +327,9 @@ def main():
                 debug_print("Nenhum grupo selecionado. Repetindo...")
                 continue
             
-            debug_print(f"Grupo: {grupo}")
+            debug_print(f"Grupo selecionado: {grupo}")
             
-            # Splash sicredi
+            # Splash sicredi (pode pular se der problema)
             sicredi_gif = os.path.join(os.path.dirname(__file__), "sicredi.gif")
             if os.path.exists(sicredi_gif):
                 debug_print("Exibindo sicredi.gif...")
@@ -417,15 +344,16 @@ def main():
             else:
                 debug_print("sicredi.gif não encontrado.")
             
-            # MainWindow
+            # ===== MAIN WINDOW =====
             debug_print("Criando MainWindow...")
             try:
                 main_window = MainWindow(grupo)
                 debug_print("MainWindow criada.")
-                forcar_janela_visivel(main_window, "MainWindow")
+                main_window.setWindowFlags(Qt.Window)
                 main_window.show()
                 main_window.raise_()
                 main_window.activateWindow()
+                QApplication.processEvents()
                 debug_print("MainWindow exibida. Entrando no loop de eventos...")
                 app.exec()
                 debug_print("Loop de eventos finalizado.")
