@@ -1,21 +1,61 @@
+vbs
+
+' iniciar.vbs
+' Executa o sistema via PowerShell, mesmo em pastas UNC
+
+Dim objShell, objFSO, strPath, strScript
+
+Set objShell = CreateObject("WScript.Shell")
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+' Obtém a pasta onde o .vbs está (suporta UNC)
+strPath = objFSO.GetParentFolderName(WScript.ScriptFullName)
+
+' Caminho do script PowerShell que executará o sistema
+strScript = strPath & "\iniciar.ps1"
+
+' Verifica se o PowerShell script existe
+If Not objFSO.FileExists(strScript) Then
+    MsgBox "Arquivo iniciar.ps1 não encontrado em:" & vbCrLf & strScript, vbCritical, "Erro"
+    WScript.Quit
+End If
+
+' Executa o PowerShell com o script, sem mostrar janela
+' 0 = janela oculta, False = não aguarda
+objShell.Run "powershell -ExecutionPolicy Bypass -File """ & strScript & """", 0, False
+
+
+
+iniciar ps1
+
 # iniciar.ps1
+# Executa o sistema a partir de uma pasta UNC (rede)
+
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pythonExe = Join-Path $scriptPath "python-portable\python.exe"
 $mainPy = Join-Path $scriptPath "main.py"
 
+# Verifica se o Python existe
 if (-not (Test-Path $pythonExe)) {
-    Write-Host "ERRO: Python nao encontrado em $pythonExe" -ForegroundColor Red
+    Write-Host "ERRO: Python não encontrado em $pythonExe" -ForegroundColor Red
     Read-Host "Pressione Enter para sair"
     exit 1
 }
 
-Write-Host "Executando sistema a partir de: $scriptPath" -ForegroundColor Cyan
+# Verifica se o main.py existe
+if (-not (Test-Path $mainPy)) {
+    Write-Host "ERRO: main.py não encontrado em $mainPy" -ForegroundColor Red
+    Read-Host "Pressione Enter para sair"
+    exit 1
+}
+
+# Executa o sistema (o PowerShell lida nativamente com caminhos UNC)
 & $pythonExe $mainPy
 
+# Se houver erro, mantém a janela aberta (se executado em modo visível)
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERRO: O sistema retornou código $LASTEXITCODE" -ForegroundColor Red
+    Read-Host "Pressione Enter para sair"
+}
 
 
-
-@echo off
-title Sistema de Automação (Leve)
-powershell -ExecutionPolicy Bypass -File "%~dp0iniciar.ps1"
-pause
