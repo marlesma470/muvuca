@@ -9,8 +9,9 @@ if (-not (Test-Path $pythonExe)) {
     exit 1
 }
 
-# Executa o sistema
+Write-Host "Executando sistema a partir de: $scriptPath" -ForegroundColor Cyan
 & $pythonExe $mainPy
+
 
 
 
