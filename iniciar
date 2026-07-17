@@ -1,0 +1,28 @@
+@echo off
+title Sistema de Automação (Leve)
+
+:: Mapeia a pasta de rede para uma unidade temporária (pushd/popd)
+pushd "%~dp0" || (
+    echo ERRO: Não foi possível acessar o diretório: %~dp0
+    pause
+    exit /b 1
+)
+
+:: Define o caminho do Python portátil
+set PYTHON_DIR=%CD%\python-portable
+set PYTHON_EXE=%PYTHON_DIR%\python.exe
+
+:: Verifica se o Python existe
+if not exist "%PYTHON_EXE%" (
+    echo ERRO: Python não encontrado em %PYTHON_EXE%
+    pause
+    popd
+    exit /b 1
+)
+
+:: Executa o sistema
+"%PYTHON_EXE%" main.py
+
+:: Retorna à pasta original (desmapeia a unidade)
+popd
+pause
