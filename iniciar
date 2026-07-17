@@ -1,26 +1,37 @@
 @echo off
 title Sistema de Automação (Leve)
 
-:: Remove aspas extras do caminho
-set "SCRIPT_DIR=%~dp0"
-set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+:: Define a letra da unidade a ser usada (verifica se Z: está livre)
+set "DRIVE=Z:"
+set "UNC_PATH=%~dp0"
+set "UNC_PATH=%UNC_PATH:~0,-1%"
 
-:: Tenta usar pushd para mapear a UNC
-pushd "%SCRIPT_DIR%" 2>nul
+:: Verifica se Z: já está em uso
+net use %DRIVE% >nul 2>&1
+if not errorlevel 1 (
+    echo A unidade %DRIVE% ja esta em uso. Usando Y:...
+    set "DRIVE=Y:"
+)
+
+:: Mapeia a pasta de rede
+net use %DRIVE% "%UNC_PATH%" /persistent:no
 if errorlevel 1 (
-    echo ERRO: Nao foi possivel acessar %SCRIPT_DIR%
-    echo Tente mapear a unidade manualmente ou execute como administrador.
+    echo ERRO: Nao foi possivel mapear %UNC_PATH% para %DRIVE%
     pause
     exit /b 1
 )
 
-:: Agora o diretório atual é a unidade mapeada (ex: Z:)
+:: Muda para a unidade mapeada
+%DRIVE%
+cd "%UNC_PATH%"
+
+:: Executa o sistema
 set "PYTHON_DIR=%CD%\python-portable"
 set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
 
 if not exist "%PYTHON_EXE%" (
     echo ERRO: Python nao encontrado em %PYTHON_EXE%
-    popd
+    net use %DRIVE% /delete /y
     pause
     exit /b 1
 )
@@ -28,6 +39,6 @@ if not exist "%PYTHON_EXE%" (
 echo Executando sistema em %CD%...
 "%PYTHON_EXE%" main.py
 
-:: Volta para o diretório original
-popd
+:: Desmapeia a unidade
+net use %DRIVE% /delete /y
 pause
