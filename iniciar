@@ -1,28 +1,33 @@
 @echo off
 title Sistema de Automação (Leve)
 
-:: Mapeia a pasta de rede para uma unidade temporária (pushd/popd)
-pushd "%~dp0" || (
-    echo ERRO: Não foi possível acessar o diretório: %~dp0
+:: Remove aspas extras do caminho
+set "SCRIPT_DIR=%~dp0"
+set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
+:: Tenta usar pushd para mapear a UNC
+pushd "%SCRIPT_DIR%" 2>nul
+if errorlevel 1 (
+    echo ERRO: Nao foi possivel acessar %SCRIPT_DIR%
+    echo Tente mapear a unidade manualmente ou execute como administrador.
     pause
     exit /b 1
 )
 
-:: Define o caminho do Python portátil
-set PYTHON_DIR=%CD%\python-portable
-set PYTHON_EXE=%PYTHON_DIR%\python.exe
+:: Agora o diretório atual é a unidade mapeada (ex: Z:)
+set "PYTHON_DIR=%CD%\python-portable"
+set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
 
-:: Verifica se o Python existe
 if not exist "%PYTHON_EXE%" (
-    echo ERRO: Python não encontrado em %PYTHON_EXE%
-    pause
+    echo ERRO: Python nao encontrado em %PYTHON_EXE%
     popd
+    pause
     exit /b 1
 )
 
-:: Executa o sistema
+echo Executando sistema em %CD%...
 "%PYTHON_EXE%" main.py
 
-:: Retorna à pasta original (desmapeia a unidade)
+:: Volta para o diretório original
 popd
 pause
