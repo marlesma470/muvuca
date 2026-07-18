@@ -1,61 +1,281 @@
-vbs
+Manual do Usuário – Sistema de Automação de Custódia
+Seja bem‑vindo ao Sistema de Automação de Custódia!
+Este manual foi criado para ajudá‑lo a utilizar todas as funcionalidades do sistema de forma simples e intuitiva.
+Você encontrará explicações passo a passo, dicas e a indicação exata de onde inserir prints das telas para ilustrar cada etapa.
 
-' iniciar.vbs
-' Executa o sistema via PowerShell, mesmo em pastas UNC
+Índice
+Visão Geral
 
-Dim objShell, objFSO, strPath, strScript
+Instalação e Primeiro Acesso
 
-Set objShell = CreateObject("WScript.Shell")
-Set objFSO = CreateObject("Scripting.FileSystemObject")
+Gerenciamento de Credenciais
 
-' Obtém a pasta onde o .vbs está (suporta UNC)
-strPath = objFSO.GetParentFolderName(WScript.ScriptFullName)
+Seleção de Grupo
 
-' Caminho do script PowerShell que executará o sistema
-strScript = strPath & "\iniciar.ps1"
+Tela Principal – Executor de Automações
 
-' Verifica se o PowerShell script existe
-If Not objFSO.FileExists(strScript) Then
-    MsgBox "Arquivo iniciar.ps1 não encontrado em:" & vbCrLf & strScript, vbCritical, "Erro"
-    WScript.Quit
-End If
+5.1. Tabela de Automações
 
-' Executa o PowerShell com o script, sem mostrar janela
-' 0 = janela oculta, False = não aguarda
-objShell.Run "powershell -ExecutionPolicy Bypass -File """ & strScript & """", 0, False
+5.2. Filtros e Busca
 
+5.3. Status e Progresso
 
+Ações sobre uma Automação
 
-iniciar ps1
+6.1. Detalhes
 
-# iniciar.ps1
-# Executa o sistema a partir de uma pasta UNC (rede)
+6.2. Executar Manualmente
 
-$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pythonExe = Join-Path $scriptPath "python-portable\python.exe"
-$mainPy = Join-Path $scriptPath "main.py"
+6.3. Editar
 
-# Verifica se o Python existe
-if (-not (Test-Path $pythonExe)) {
-    Write-Host "ERRO: Python não encontrado em $pythonExe" -ForegroundColor Red
-    Read-Host "Pressione Enter para sair"
-    exit 1
-}
+6.4. Excluir
 
-# Verifica se o main.py existe
-if (-not (Test-Path $mainPy)) {
-    Write-Host "ERRO: main.py não encontrado em $mainPy" -ForegroundColor Red
-    Read-Host "Pressione Enter para sair"
-    exit 1
-}
+6.5. Chat
 
-# Executa o sistema (o PowerShell lida nativamente com caminhos UNC)
-& $pythonExe $mainPy
+Como Agendar uma Nova Automação
 
-# Se houver erro, mantém a janela aberta (se executado em modo visível)
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: O sistema retornou código $LASTEXITCODE" -ForegroundColor Red
-    Read-Host "Pressione Enter para sair"
-}
+Teste de Automação (Modo Visível)
 
+Chat – Comunicação entre Usuários
 
+Dicas e Solução de Problemas
+
+Encerrando o Sistema
+
+1. Visão Geral
+O sistema permite agendar e executar scripts Python (automações) de forma periódica, organizando‑os em grupos (pastas dentro da pasta Atividades).
+Cada automação possui:
+
+Nome (que deve coincidir com o nome do arquivo .py)
+
+Periodicidade (diária, semanal, mensal, etc.)
+
+Horário de execução
+
+Status (Aguardando, Executando, Executado, Falha, Expirado)
+
+Além disso, o sistema gerencia credenciais de sistemas externos (CETIP, Galgo, etc.) de forma segura e oferece um chat para cada automação, permitindo troca de mensagens entre os usuários.
+
+2. Instalação e Primeiro Acesso
+2.1. Pré‑requisitos
+Windows 10 ou superior
+
+Python 3.8+ instalado
+
+Microsoft Edge (utilizado pelo Playwright)
+
+2.2. Instalação das Dependências
+Extraia o conteúdo do pacote (os arquivos parte_*.b64, extrair.cmd e extrair.ps1) em uma pasta de sua preferência.
+
+Execute extrair.cmd – isso reconstruirá todos os arquivos do sistema.
+
+Após a extração, execute instalar_dependencias.py (com duplo clique ou via linha de comando) para instalar as bibliotecas necessárias.
+
+✅ Dica: O script instalar_dependencias.py já baixa e instala todas as dependências automaticamente.
+
+2.3. Primeiro Acesso
+Execute main.py (ou o executável Launcher.exe, se disponível).
+
+Na primeira execução, o sistema criará as pastas necessárias:
+
+Atividades/ (no diretório do sistema)
+
+%APPDATA%\AutomacaoCustodia\ (onde ficam o banco de dados, credenciais e logs)
+
+3. Gerenciamento de Credenciais
+Ao iniciar o sistema, a primeira tela exibida é o Gerenciamento de Credenciais.
+
+[INSERIR PRINT DA TELA DE CREDENCIAIS]
+
+Como usar:
+Selecione um sistema no combo box (ex.: CETIP PRÓPRIA, Galgo Max, etc.)
+
+Preencha os campos Login e Senha.
+
+Clique em Salvar e Entrar para prosseguir.
+
+Use o botão 👁 (olho) para mostrar/ocultar a senha.
+
+O botão Limpar apaga todas as credenciais do sistema selecionado.
+
+Sair fecha o aplicativo.
+
+🔒 Segurança: As credenciais são criptografadas usando a API de Proteção de Dados do Windows (DPAPI) – apenas o seu usuário logado pode descriptografá‑las.
+
+4. Seleção de Grupo
+Após salvar as credenciais, você verá a tela Selecionar Grupo.
+
+[INSERIR PRINT DA TELA DE SELEÇÃO DE GRUPO]
+
+Aqui são listadas todas as pastas existentes dentro da pasta Atividades/. Cada pasta representa um grupo de automações.
+
+Clique no nome do grupo desejado para acessar suas automações.
+
+Se quiser visualizar todos os grupos juntos, clique no botão 📋 Todos.
+
+Se a lista estiver vazia, o sistema criará automaticamente a pasta Atividades/. Para criar um novo grupo, basta criar uma subpasta manualmente (ex.: Atividades/MeuGrupo) e colocar seus scripts .py dentro dela.
+
+5. Tela Principal – Executor de Automações
+Esta é a tela central do sistema. Ela exibe todas as automações do grupo selecionado (ou de todos os grupos, se você escolheu "Todos").
+
+[INSERIR PRINT DA TELA PRINCIPAL]
+
+5.1. Tabela de Automações
+A tabela possui 6 colunas:
+
+Coluna	Descrição
+Grupo	Nome do grupo a que pertence a automação.
+Nome	Nome da automação (igual ao nome do arquivo .py).
+Próxima	Data e hora da próxima execução agendada.
+Status	Aguardando, Executando, Executado, Falha ou Expirado.
+Progresso	Barra colorida indicando o tempo restante para a próxima execução.
+Retorno	Mensagem de sucesso ou falha da última execução.
+5.2. Filtros e Busca
+Campo "Buscar": digite qualquer termo para filtrar automações por nome, grupo, status, etc.
+
+Combo "Período": filtre por datas (ex.: Hoje, Amanhã, Semana atual, etc.).
+
+5.3. Status e Progresso
+Aguardando – aguardando o horário agendado.
+
+Executando – a automação está em andamento.
+
+Executado – a última execução foi bem‑sucedida.
+
+Falha – ocorreu um erro na última execução.
+
+Expirado – o horário agendado passou enquanto o sistema estava aberto (não foi executado). Para reativar, edite a automação e clique em "Salvar" (ela será reagendada).
+
+A barra de progresso fica verde (muito tempo), amarela (pouco tempo) ou vermelha (tempo crítico) para facilitar a visualização.
+
+6. Ações sobre uma Automação
+Para abrir as ações, dê um duplo clique em qualquer linha da tabela. Uma janela de Detalhes será exibida.
+
+[INSERIR PRINT DA JANELA DE DETALHES]
+
+Na janela de detalhes, você encontrará:
+
+6.1. Detalhes
+Mostra todas as informações da automação (nome, script, periodicidade, horário, status, etc.).
+
+6.2. Executar Manualmente
+Clique no botão Executar para disparar a execução imediatamente (independentemente do agendamento). A execução ocorre em modo headless (invisível) para não atrapalhar seu trabalho.
+
+6.3. Editar
+Clique em Editar para abrir o diálogo de edição (veja seção 7).
+
+6.4. Excluir
+Clique em Excluir para remover a automação permanentemente. O arquivo .py também será deletado da pasta do grupo.
+
+6.5. Chat
+Acessa o chat da automação (veja seção 9).
+
+7. Como Agendar uma Nova Automação
+O sistema não possui um botão "Novo" – as automações são criadas automaticamente a partir dos arquivos .py que você colocar nas pastas de grupo.
+
+Passo a passo:
+
+Crie um script Python com a extensão .py (ex.: meu_script.py).
+
+Coloque‑o dentro de uma subpasta em Atividades/ (ex.: Atividades/MeuGrupo/meu_script.py).
+
+Ao iniciar o sistema (ou após alguns segundos), o script aparecerá na tabela com as configurações padrão (diário, às 08:00, ativo).
+
+Para alterar o agendamento (horário, periodicidade, etc.), edite a automação:
+
+Na tela principal, dê duplo clique na automação.
+
+Na janela de detalhes, clique em Editar.
+
+[INSERIR PRINT DA JANELA DE EDIÇÃO]
+
+Na janela de edição, você pode:
+
+Alterar o nome da automação (isso renomeará o arquivo .py automaticamente).
+
+Definir horário e data de início.
+
+Escolher a periodicidade:
+
+Diário (dias corridos)
+
+Diário (dias úteis) – pula fins de semana
+
+Semanal – escolha o dia da semana
+
+Mensal – escolha o dia do mês (e a regra de dia útil: “Dia corrido”, “Dia útil anterior” ou “Dia útil posterior”)
+
+Quinzenal
+
+Anual – escolha o dia do ano (1 a 365)
+
+Ativar/desativar o agendamento.
+
+Testar a automação em modo visível (veja seção 8).
+
+Clique em OK para salvar as alterações.
+
+8. Teste de Automação (Modo Visível)
+Na janela de edição, você encontrará o botão ▶ Testar (visível).
+Este botão executa o script com --headless False, ou seja, o navegador (caso o script use Playwright/Selenium) aparecerá na tela, permitindo que você veja o que está acontecendo – útil para depuração.
+
+O resultado do teste será mostrado em uma mensagem de sucesso ou erro.
+O teste não afeta o agendamento e não é registrado no histórico.
+
+9. Chat – Comunicação entre Usuários
+Cada automação possui um chat próprio, onde os usuários podem trocar mensagens.
+O chat é baseado em arquivos de texto (Chats/<grupo>/<nome_automacao>.txt) e é compartilhado entre todos que acessam o sistema na mesma máquina (ou rede, se a pasta for compartilhada).
+
+Como acessar:
+Na tela principal, duplo clique na automação → Detalhes → Chat (ou clique no botão "Chat" da janela de detalhes).
+
+Alternativamente, na janela de detalhes, vá até a aba Chat.
+
+[INSERIR PRINT DO CHAT]
+
+Funcionalidades:
+Digite sua mensagem no campo inferior e pressione Enter ou clique em "Enviar".
+
+As mensagens aparecem em balões:
+
+As suas mensagens (identificadas pelo nome de usuário do Windows) ficam à direita, com fundo verde.
+
+As mensagens dos outros ficam à esquerda.
+
+Para excluir uma mensagem sua, clique no X vermelho ao lado dela.
+
+O chat é atualizado automaticamente a cada 5 segundos – você pode ver novas mensagens sem precisar recarregar.
+
+10. Dicas e Solução de Problemas
+🔹 Minha automação não aparece na tabela.
+Verifique se o arquivo .py está dentro de uma subpasta em Atividades/.
+
+O nome do arquivo deve ter extensão .py.
+
+Aguarde alguns segundos (o sistema sincroniza automaticamente).
+
+🔹 A automação está com status "Expirado".
+Isso acontece quando o horário agendado passou e o sistema estava aberto.
+
+Solução: Edite a automação, mude qualquer campo (ex.: horário) e salve – ela será reativada.
+
+🔹 O script não executa ou dá erro.
+Verifique se o script possui a estrutura correta (deve aceitar o argumento --headless).
+
+Consulte os logs detalhados em Logs/ (pasta do sistema) – arquivos com nome nome_automacao_YYYYMMDD_HHMMSS.log.
+
+No diálogo de detalhes, o campo "Retorno" exibe a mensagem de erro resumida.
+
+🔹 Não consigo salvar as credenciais.
+Certifique‑se de que você tem permissão de escrita em %APPDATA%\AutomacaoCustodia\.
+
+Se o erro persistir, tente executar o programa como administrador.
+
+🔹 O chat não mostra mensagens de outros usuários.
+O chat é armazenado localmente; todos os usuários devem ter acesso à mesma pasta Chats/ (recomenda‑se que essa pasta esteja em um drive compartilhado).
+
+11. Encerrando o Sistema
+Para sair do sistema, clique no botão Voltar na tela principal (ou feche a janela).
+O sistema garantirá que todas as automações em execução sejam finalizadas antes de encerrar.
+
+Importante: Se você fechar o sistema, as automações agendadas não serão executadas enquanto o sistema estiver desligado. Mantenha o sistema aberto para que os agendamentos funcionem.
