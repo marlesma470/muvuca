@@ -1,281 +1,407 @@
-Manual do Usuário – Sistema de Automação de Custódia
-Seja bem‑vindo ao Sistema de Automação de Custódia!
-Este manual foi criado para ajudá‑lo a utilizar todas as funcionalidades do sistema de forma simples e intuitiva.
-Você encontrará explicações passo a passo, dicas e a indicação exata de onde inserir prints das telas para ilustrar cada etapa.
-
-Índice
-Visão Geral
-
-Instalação e Primeiro Acesso
-
-Gerenciamento de Credenciais
-
-Seleção de Grupo
-
-Tela Principal – Executor de Automações
-
-5.1. Tabela de Automações
-
-5.2. Filtros e Busca
-
-5.3. Status e Progresso
-
-Ações sobre uma Automação
-
-6.1. Detalhes
-
-6.2. Executar Manualmente
-
-6.3. Editar
-
-6.4. Excluir
-
-6.5. Chat
-
-Como Agendar uma Nova Automação
-
-Teste de Automação (Modo Visível)
-
-Chat – Comunicação entre Usuários
-
-Dicas e Solução de Problemas
-
-Encerrando o Sistema
-
-1. Visão Geral
-O sistema permite agendar e executar scripts Python (automações) de forma periódica, organizando‑os em grupos (pastas dentro da pasta Atividades).
-Cada automação possui:
-
-Nome (que deve coincidir com o nome do arquivo .py)
-
-Periodicidade (diária, semanal, mensal, etc.)
-
-Horário de execução
-
-Status (Aguardando, Executando, Executado, Falha, Expirado)
-
-Além disso, o sistema gerencia credenciais de sistemas externos (CETIP, Galgo, etc.) de forma segura e oferece um chat para cada automação, permitindo troca de mensagens entre os usuários.
-
-2. Instalação e Primeiro Acesso
-2.1. Pré‑requisitos
-Windows 10 ou superior
-
-Python 3.8+ instalado
-
-Microsoft Edge (utilizado pelo Playwright)
-
-2.2. Instalação das Dependências
-Extraia o conteúdo do pacote (os arquivos parte_*.b64, extrair.cmd e extrair.ps1) em uma pasta de sua preferência.
-
-Execute extrair.cmd – isso reconstruirá todos os arquivos do sistema.
-
-Após a extração, execute instalar_dependencias.py (com duplo clique ou via linha de comando) para instalar as bibliotecas necessárias.
-
-✅ Dica: O script instalar_dependencias.py já baixa e instala todas as dependências automaticamente.
-
-2.3. Primeiro Acesso
-Execute main.py (ou o executável Launcher.exe, se disponível).
-
-Na primeira execução, o sistema criará as pastas necessárias:
-
-Atividades/ (no diretório do sistema)
-
-%APPDATA%\AutomacaoCustodia\ (onde ficam o banco de dados, credenciais e logs)
-
-3. Gerenciamento de Credenciais
-Ao iniciar o sistema, a primeira tela exibida é o Gerenciamento de Credenciais.
-
-[INSERIR PRINT DA TELA DE CREDENCIAIS]
-
-Como usar:
-Selecione um sistema no combo box (ex.: CETIP PRÓPRIA, Galgo Max, etc.)
-
-Preencha os campos Login e Senha.
-
-Clique em Salvar e Entrar para prosseguir.
-
-Use o botão 👁 (olho) para mostrar/ocultar a senha.
-
-O botão Limpar apaga todas as credenciais do sistema selecionado.
-
-Sair fecha o aplicativo.
-
-🔒 Segurança: As credenciais são criptografadas usando a API de Proteção de Dados do Windows (DPAPI) – apenas o seu usuário logado pode descriptografá‑las.
-
-4. Seleção de Grupo
-Após salvar as credenciais, você verá a tela Selecionar Grupo.
-
-[INSERIR PRINT DA TELA DE SELEÇÃO DE GRUPO]
-
-Aqui são listadas todas as pastas existentes dentro da pasta Atividades/. Cada pasta representa um grupo de automações.
-
-Clique no nome do grupo desejado para acessar suas automações.
-
-Se quiser visualizar todos os grupos juntos, clique no botão 📋 Todos.
-
-Se a lista estiver vazia, o sistema criará automaticamente a pasta Atividades/. Para criar um novo grupo, basta criar uma subpasta manualmente (ex.: Atividades/MeuGrupo) e colocar seus scripts .py dentro dela.
-
-5. Tela Principal – Executor de Automações
-Esta é a tela central do sistema. Ela exibe todas as automações do grupo selecionado (ou de todos os grupos, se você escolheu "Todos").
-
-[INSERIR PRINT DA TELA PRINCIPAL]
-
-5.1. Tabela de Automações
-A tabela possui 6 colunas:
-
-Coluna	Descrição
-Grupo	Nome do grupo a que pertence a automação.
-Nome	Nome da automação (igual ao nome do arquivo .py).
-Próxima	Data e hora da próxima execução agendada.
-Status	Aguardando, Executando, Executado, Falha ou Expirado.
-Progresso	Barra colorida indicando o tempo restante para a próxima execução.
-Retorno	Mensagem de sucesso ou falha da última execução.
-5.2. Filtros e Busca
-Campo "Buscar": digite qualquer termo para filtrar automações por nome, grupo, status, etc.
-
-Combo "Período": filtre por datas (ex.: Hoje, Amanhã, Semana atual, etc.).
-
-5.3. Status e Progresso
-Aguardando – aguardando o horário agendado.
-
-Executando – a automação está em andamento.
-
-Executado – a última execução foi bem‑sucedida.
-
-Falha – ocorreu um erro na última execução.
-
-Expirado – o horário agendado passou enquanto o sistema estava aberto (não foi executado). Para reativar, edite a automação e clique em "Salvar" (ela será reagendada).
-
-A barra de progresso fica verde (muito tempo), amarela (pouco tempo) ou vermelha (tempo crítico) para facilitar a visualização.
-
-6. Ações sobre uma Automação
-Para abrir as ações, dê um duplo clique em qualquer linha da tabela. Uma janela de Detalhes será exibida.
-
-[INSERIR PRINT DA JANELA DE DETALHES]
-
-Na janela de detalhes, você encontrará:
-
-6.1. Detalhes
-Mostra todas as informações da automação (nome, script, periodicidade, horário, status, etc.).
-
-6.2. Executar Manualmente
-Clique no botão Executar para disparar a execução imediatamente (independentemente do agendamento). A execução ocorre em modo headless (invisível) para não atrapalhar seu trabalho.
-
-6.3. Editar
-Clique em Editar para abrir o diálogo de edição (veja seção 7).
-
-6.4. Excluir
-Clique em Excluir para remover a automação permanentemente. O arquivo .py também será deletado da pasta do grupo.
-
-6.5. Chat
-Acessa o chat da automação (veja seção 9).
-
-7. Como Agendar uma Nova Automação
-O sistema não possui um botão "Novo" – as automações são criadas automaticamente a partir dos arquivos .py que você colocar nas pastas de grupo.
-
-Passo a passo:
-
-Crie um script Python com a extensão .py (ex.: meu_script.py).
-
-Coloque‑o dentro de uma subpasta em Atividades/ (ex.: Atividades/MeuGrupo/meu_script.py).
-
-Ao iniciar o sistema (ou após alguns segundos), o script aparecerá na tabela com as configurações padrão (diário, às 08:00, ativo).
-
-Para alterar o agendamento (horário, periodicidade, etc.), edite a automação:
-
-Na tela principal, dê duplo clique na automação.
-
-Na janela de detalhes, clique em Editar.
-
-[INSERIR PRINT DA JANELA DE EDIÇÃO]
-
-Na janela de edição, você pode:
-
-Alterar o nome da automação (isso renomeará o arquivo .py automaticamente).
-
-Definir horário e data de início.
-
-Escolher a periodicidade:
-
-Diário (dias corridos)
-
-Diário (dias úteis) – pula fins de semana
-
-Semanal – escolha o dia da semana
-
-Mensal – escolha o dia do mês (e a regra de dia útil: “Dia corrido”, “Dia útil anterior” ou “Dia útil posterior”)
-
-Quinzenal
-
-Anual – escolha o dia do ano (1 a 365)
-
-Ativar/desativar o agendamento.
-
-Testar a automação em modo visível (veja seção 8).
-
-Clique em OK para salvar as alterações.
-
-8. Teste de Automação (Modo Visível)
-Na janela de edição, você encontrará o botão ▶ Testar (visível).
-Este botão executa o script com --headless False, ou seja, o navegador (caso o script use Playwright/Selenium) aparecerá na tela, permitindo que você veja o que está acontecendo – útil para depuração.
-
-O resultado do teste será mostrado em uma mensagem de sucesso ou erro.
-O teste não afeta o agendamento e não é registrado no histórico.
-
-9. Chat – Comunicação entre Usuários
-Cada automação possui um chat próprio, onde os usuários podem trocar mensagens.
-O chat é baseado em arquivos de texto (Chats/<grupo>/<nome_automacao>.txt) e é compartilhado entre todos que acessam o sistema na mesma máquina (ou rede, se a pasta for compartilhada).
-
-Como acessar:
-Na tela principal, duplo clique na automação → Detalhes → Chat (ou clique no botão "Chat" da janela de detalhes).
-
-Alternativamente, na janela de detalhes, vá até a aba Chat.
-
-[INSERIR PRINT DO CHAT]
-
-Funcionalidades:
-Digite sua mensagem no campo inferior e pressione Enter ou clique em "Enviar".
-
-As mensagens aparecem em balões:
-
-As suas mensagens (identificadas pelo nome de usuário do Windows) ficam à direita, com fundo verde.
-
-As mensagens dos outros ficam à esquerda.
-
-Para excluir uma mensagem sua, clique no X vermelho ao lado dela.
-
-O chat é atualizado automaticamente a cada 5 segundos – você pode ver novas mensagens sem precisar recarregar.
-
-10. Dicas e Solução de Problemas
-🔹 Minha automação não aparece na tabela.
-Verifique se o arquivo .py está dentro de uma subpasta em Atividades/.
-
-O nome do arquivo deve ter extensão .py.
-
-Aguarde alguns segundos (o sistema sincroniza automaticamente).
-
-🔹 A automação está com status "Expirado".
-Isso acontece quando o horário agendado passou e o sistema estava aberto.
-
-Solução: Edite a automação, mude qualquer campo (ex.: horário) e salve – ela será reativada.
-
-🔹 O script não executa ou dá erro.
-Verifique se o script possui a estrutura correta (deve aceitar o argumento --headless).
-
-Consulte os logs detalhados em Logs/ (pasta do sistema) – arquivos com nome nome_automacao_YYYYMMDD_HHMMSS.log.
-
-No diálogo de detalhes, o campo "Retorno" exibe a mensagem de erro resumida.
-
-🔹 Não consigo salvar as credenciais.
-Certifique‑se de que você tem permissão de escrita em %APPDATA%\AutomacaoCustodia\.
-
-Se o erro persistir, tente executar o programa como administrador.
-
-🔹 O chat não mostra mensagens de outros usuários.
-O chat é armazenado localmente; todos os usuários devem ter acesso à mesma pasta Chats/ (recomenda‑se que essa pasta esteja em um drive compartilhado).
-
-11. Encerrando o Sistema
-Para sair do sistema, clique no botão Voltar na tela principal (ou feche a janela).
-O sistema garantirá que todas as automações em execução sejam finalizadas antes de encerrar.
-
-Importante: Se você fechar o sistema, as automações agendadas não serão executadas enquanto o sistema estiver desligado. Mantenha o sistema aberto para que os agendamentos funcionem.
+"""
+Serviço de credenciais com criptografia DPAPI.
+Sistemas fixos lidos do arquivo JSON compartilhado (sistemas_credenciais.json).
+Credenciais (valores) permanecem na pasta local do usuário (%APPDATA%).
+"""
+
+import os
+import base64
+import ctypes
+import time
+import atexit
+import json
+from ctypes import wintypes
+from typing import List, Dict, Tuple, Optional
+import threading
+
+# ============================================================
+# CONSTANTES (LOCAIS POR USUÁRIO)
+# ============================================================
+
+APP_DATA_LOCAL = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
+os.makedirs(APP_DATA_LOCAL, exist_ok=True)
+
+CREDENTIALS_DAT = os.path.join(APP_DATA_LOCAL, 'credenciais_sistemas.dat')
+CREDENTIALS_TXT = os.path.join(APP_DATA_LOCAL, 'credenciais_sistemas.txt')
+
+# ============================================================
+# SISTEMAS FIXOS (lidos do arquivo JSON compartilhado)
+# ============================================================
+
+def _carregar_sistemas_do_json() -> Dict[str, List[str]]:
+    """Carrega a lista de sistemas e seus campos do arquivo JSON."""
+    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sistemas_credenciais.json')
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            dados = json.load(f)
+            return dados.get("sistemas", {})
+    except:
+        # Fallback para sistemas padrão
+        return {
+            "CETIP PRÓPRIA": ["Login", "Senha"],
+            "CETIP TERCEIROS": ["Login", "Senha"],
+            "Galgo Max": ["Login", "Senha"],
+            "CME Group": ["Login", "Senha"],
+            "Nexus": ["Login", "Senha"]
+        }
+
+# Variável global que será atualizada sempre que o JSON for recarregado
+SISTEMAS_FIXOS = _carregar_sistemas_do_json()
+
+# Lock e cache
+_cred_lock = threading.RLock()
+_cache: Dict[str, Dict[str, any]] = {}
+_cache_timestamp: float = 0
+_CACHE_TTL = 5.0
+_temp_file_created = False
+
+# ============================================================
+# DPAPI
+# ============================================================
+
+CRYPTPROTECT_UI_FORBIDDEN = 0x01
+
+class DATA_BLOB(ctypes.Structure):
+    _fields_ = [
+        ('cbData', wintypes.DWORD),
+        ('pbData', ctypes.POINTER(wintypes.BYTE))
+    ]
+
+def _blob_from_bytes(data: bytes) -> DATA_BLOB:
+    blob = DATA_BLOB()
+    blob.cbData = len(data)
+    blob.pbData = ctypes.cast(
+        ctypes.create_string_buffer(data, len(data)),
+        ctypes.POINTER(wintypes.BYTE)
+    )
+    return blob
+
+def _bytes_from_blob(blob: DATA_BLOB) -> bytes:
+    if blob.cbData == 0 or not blob.pbData:
+        return b''
+    return ctypes.string_at(blob.pbData, blob.cbData)
+
+def _crypt_protect_data(data: bytes) -> bytes:
+    if not data:
+        return b''
+    blob_in = _blob_from_bytes(data)
+    blob_out = DATA_BLOB()
+    crypt32 = ctypes.windll.crypt32
+    result = crypt32.CryptProtectData(
+        ctypes.byref(blob_in),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_UI_FORBIDDEN,
+        ctypes.byref(blob_out)
+    )
+    if not result:
+        error_code = ctypes.windll.kernel32.GetLastError()
+        raise Exception(f"Falha ao criptografar (Código: {error_code})")
+    encrypted = _bytes_from_blob(blob_out)
+    kernel32 = ctypes.windll.kernel32
+    if blob_out.pbData:
+        kernel32.LocalFree(blob_out.pbData)
+    return encrypted
+
+def _crypt_unprotect_data(encrypted_data: bytes) -> bytes:
+    if not encrypted_data:
+        return b''
+    blob_in = _blob_from_bytes(encrypted_data)
+    blob_out = DATA_BLOB()
+    crypt32 = ctypes.windll.crypt32
+    result = crypt32.CryptUnprotectData(
+        ctypes.byref(blob_in),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_UI_FORBIDDEN,
+        ctypes.byref(blob_out)
+    )
+    if not result:
+        error_code = ctypes.windll.kernel32.GetLastError()
+        raise Exception(f"Falha ao descriptografar (Código: {error_code})")
+    decrypted = _bytes_from_blob(blob_out)
+    kernel32 = ctypes.windll.kernel32
+    if blob_out.pbData:
+        kernel32.LocalFree(blob_out.pbData)
+    return decrypted
+
+# ============================================================
+# CHAVE ANTIGA (migração)
+# ============================================================
+_OLD_KEY = b"Sicredi@2024#AutoCustodia!ChaveSecreta1234"[:32]
+_OLD_IV = b"SicrediIV16bytes"[:16]
+
+def _decrypt_old(aes_cipher_text: str) -> str:
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives import padding
+        from cryptography.hazmat.backends import default_backend
+        backend = default_backend()
+        cipher_bytes = base64.b64decode(aes_cipher_text)
+        cipher = Cipher(algorithms.AES(_OLD_KEY), modes.CBC(_OLD_IV), backend=backend)
+        decryptor = cipher.decryptor()
+        padded_data = decryptor.update(cipher_bytes) + decryptor.finalize()
+        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+        plain_bytes = unpadder.update(padded_data) + unpadder.finalize()
+        return plain_bytes.decode('utf-8')
+    except Exception:
+        return ""
+
+def _encrypt(plain_text: str) -> str:
+    if not plain_text:
+        return ""
+    try:
+        encrypted_bytes = _crypt_protect_data(plain_text.encode('utf-8'))
+        return base64.b64encode(encrypted_bytes).decode('ascii')
+    except Exception:
+        return ""
+
+def _decrypt(cipher_text: str) -> str:
+    if not cipher_text:
+        return ""
+    try:
+        encrypted_bytes = base64.b64decode(cipher_text)
+        decrypted_bytes = _crypt_unprotect_data(encrypted_bytes)
+        if decrypted_bytes:
+            return decrypted_bytes.decode('utf-8')
+    except Exception:
+        pass
+    try:
+        decrypted = _decrypt_old(cipher_text)
+        if decrypted:
+            return decrypted
+    except Exception:
+        pass
+    return ""
+
+# ============================================================
+# CARREGAMENTO E SALVAMENTO (com cache)
+# ============================================================
+
+def _carregar_credenciais_do_dat() -> Dict[str, Dict[str, any]]:
+    creds = {}
+    if not os.path.exists(CREDENTIALS_DAT):
+        return creds
+    try:
+        with open(CREDENTIALS_DAT, 'r', encoding='utf-8') as f:
+            encrypted = f.read().strip()
+            if not encrypted:
+                return creds
+            decrypted = _decrypt(encrypted)
+            if not decrypted:
+                return creds
+            lines = decrypted.splitlines()
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                partes = line.split('|')
+                if len(partes) < 2:
+                    continue
+                sistema = partes[0].strip()
+                try:
+                    num_campos = int(partes[1])
+                except ValueError:
+                    continue
+                campos = []
+                valores = {}
+                idx = 2
+                for _ in range(num_campos):
+                    if idx + 1 < len(partes):
+                        campo = partes[idx]
+                        valor = partes[idx + 1]
+                        idx += 2
+                        campos.append(campo)
+                        valores[campo] = valor
+                creds[sistema] = {
+                    'campos': campos,
+                    'valores': valores
+                }
+    except Exception:
+        pass
+    return creds
+
+def _salvar_credenciais_no_dat(creds: Dict[str, Dict[str, any]]):
+    linhas = []
+    for sistema, dados in creds.items():
+        linha = f"{sistema}|{len(dados['campos'])}"
+        for campo in dados['campos']:
+            valor = dados['valores'].get(campo, "")
+            linha += f"|{campo}|{valor}"
+        linhas.append(linha)
+    conteudo_plano = "\n".join(linhas)
+    if not conteudo_plano:
+        conteudo_plano = ""
+    encrypted = _encrypt(conteudo_plano)
+    if encrypted:
+        temp_path = CREDENTIALS_DAT + ".tmp"
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(encrypted)
+            os.replace(temp_path, CREDENTIALS_DAT)
+        except Exception:
+            with open(CREDENTIALS_DAT, 'w', encoding='utf-8') as f:
+                f.write(encrypted)
+        try:
+            if os.path.exists(CREDENTIALS_TXT):
+                os.remove(CREDENTIALS_TXT)
+        except Exception:
+            pass
+
+def _obter_credenciais_com_cache(force_reload: bool = False) -> Dict[str, Dict[str, any]]:
+    global _cache, _cache_timestamp, SISTEMAS_FIXOS
+    with _cred_lock:
+        agora = time.time()
+        if force_reload or not _cache or (agora - _cache_timestamp) > _CACHE_TTL:
+            # Recarrega o JSON para obter a lista mais recente de sistemas
+            SISTEMAS_FIXOS = _carregar_sistemas_do_json()
+            _cache = _carregar_credenciais_do_dat()
+            _garantir_sistemas_fixos()
+            _cache_timestamp = agora
+            _criar_arquivo_temp()
+        return _cache
+
+def _garantir_sistemas_fixos():
+    global SISTEMAS_FIXOS, _cache
+    # Recarrega o JSON novamente (garantia)
+    SISTEMAS_FIXOS = _carregar_sistemas_do_json()
+
+    alterado = False
+    for sistema, campos in SISTEMAS_FIXOS.items():
+        if sistema not in _cache:
+            _cache[sistema] = {
+                'campos': campos.copy(),
+                'valores': {campo: "" for campo in campos}
+            }
+            alterado = True
+        else:
+            campos_existentes = _cache[sistema]['campos']
+            if set(campos_existentes) != set(campos):
+                novos_campos = campos.copy()
+                valores_existentes = _cache[sistema]['valores']
+                novos_valores = {}
+                for c in novos_campos:
+                    novos_valores[c] = valores_existentes.get(c, "")
+                _cache[sistema]['campos'] = novos_campos
+                _cache[sistema]['valores'] = novos_valores
+                alterado = True
+    if alterado:
+        _salvar_credenciais_no_dat(_cache)
+
+def _invalidar_cache():
+    global _cache, _cache_timestamp
+    with _cred_lock:
+        _cache = {}
+        _cache_timestamp = 0
+
+# ============================================================
+# ARQUIVO TEMPORÁRIO (texto puro para scripts)
+# ============================================================
+
+def _criar_arquivo_temp():
+    global _temp_file_created
+    try:
+        creds = _cache.copy()
+        if not creds:
+            return
+        linhas = []
+        for sistema, dados in creds.items():
+            linha = f"{sistema}|{len(dados['campos'])}"
+            for campo in dados['campos']:
+                valor = dados['valores'].get(campo, "")
+                linha += f"|{campo}|{valor}"
+            linhas.append(linha)
+        conteudo = "\n".join(linhas)
+        with open(CREDENTIALS_TXT, 'w', encoding='utf-8') as f:
+            f.write(conteudo)
+        _temp_file_created = True
+        atexit.register(_remover_arquivo_temp)
+    except Exception as e:
+        print(f"Erro ao criar arquivo temporário: {e}")
+
+def _remover_arquivo_temp():
+    global _temp_file_created
+    try:
+        if os.path.exists(CREDENTIALS_TXT):
+            os.remove(CREDENTIALS_TXT)
+            _temp_file_created = False
+    except Exception:
+        pass
+
+def remover_credenciais_temp():
+    _remover_arquivo_temp()
+
+# ============================================================
+# FUNÇÕES PÚBLICAS
+# ============================================================
+
+def listar_sistemas() -> List[str]:
+    """Retorna a lista de sistemas fixos (do JSON)."""
+    global SISTEMAS_FIXOS
+    # Força recarregar para garantir que está atualizado
+    SISTEMAS_FIXOS = _carregar_sistemas_do_json()
+    return sorted(SISTEMAS_FIXOS.keys())
+
+def carregar_credenciais(sistema: str) -> Tuple[List[str], Dict[str, str]]:
+    """Carrega as credenciais de um sistema."""
+    global SISTEMAS_FIXOS
+    if sistema not in SISTEMAS_FIXOS:
+        return [], {}
+    creds = _obter_credenciais_com_cache(force_reload=True)  # Força recarga para capturar novas credenciais
+    if sistema in creds:
+        dados = creds[sistema]
+        return dados['campos'], dados['valores']
+    return SISTEMAS_FIXOS[sistema], {campo: "" for campo in SISTEMAS_FIXOS[sistema]}
+
+def salvar_credenciais(sistema: str, campos: List[str], valores: Dict[str, str]):
+    """Salva as credenciais de um sistema (apenas valores)."""
+    global SISTEMAS_FIXOS
+    if sistema not in SISTEMAS_FIXOS:
+        raise ValueError(f"Sistema '{sistema}' não é um sistema fixo.")
+    campos_fixos = SISTEMAS_FIXOS[sistema]
+    valores_filtrados = {c: valores.get(c, "") for c in campos_fixos}
+    with _cred_lock:
+        creds = _obter_credenciais_com_cache(force_reload=True)
+        creds[sistema] = {
+            'campos': campos_fixos,
+            'valores': valores_filtrados
+        }
+        _salvar_credenciais_no_dat(creds)
+        _invalidar_cache()
+        _obter_credenciais_com_cache(force_reload=True)
+
+def excluir_credencial(sistema: str):
+    """Reseta as credenciais para vazio."""
+    global SISTEMAS_FIXOS
+    if sistema not in SISTEMAS_FIXOS:
+        return
+    with _cred_lock:
+        creds = _obter_credenciais_com_cache(force_reload=True)
+        if sistema in creds:
+            creds[sistema]['valores'] = {c: "" for c in SISTEMAS_FIXOS[sistema]}
+            _salvar_credenciais_no_dat(creds)
+            _invalidar_cache()
+            _obter_credenciais_com_cache(force_reload=True)
+
+def credencial_existe(sistema: str) -> bool:
+    """Verifica se há valores preenchidos."""
+    global SISTEMAS_FIXOS
+    if sistema not in SISTEMAS_FIXOS:
+        return False
+    _, valores = carregar_credenciais(sistema)
+    return any(v.strip() for v in valores.values())
+
+def obter_credencial(sistema: str, campo: str) -> Optional[str]:
+    """Obtém o valor de um campo específico."""
+    _, valores = carregar_credenciais(sistema)
+    return valores.get(campo)
+
+def inicializar_sistemas_fixos():
+    """Garante que todos os sistemas fixos existam no cache."""
+    global SISTEMAS_FIXOS
+    SISTEMAS_FIXOS = _carregar_sistemas_do_json()
+    _obter_credenciais_com_cache(force_reload=True)
