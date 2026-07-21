@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM SELETORES PRECISOS
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO FINAL ROBUSTA
 # =============================================================================
 
 import os
@@ -113,84 +113,95 @@ def navegar_ate_custo_selic(page):
     page.click('a:has-text("Extrato")')
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
-    # Aguarda o carregamento completo da página Angular
     page.wait_for_load_state("networkidle", timeout=60000)
-    time.sleep(3)  # tolerância extra
+    time.sleep(2)
 
-def clicar_download_com_validacao(page, descricao):
+def garantir_botao_download_visivel(page, descricao):
     """
-    Tenta clicar no botão de download usando o seletor exato do HTML.
+    Verifica se o botão de download está visível.
+    Se não, clica em 'Consultar' e aguarda.
+    Retorna o elemento do botão.
     """
-    # Seletor exato extraído do HTML fornecido
-    seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+    seletor_botao = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+    # Verifica se já está visível
+    if page.locator(seletor_botao).count() > 0 and page.locator(seletor_botao).first.is_visible():
+        print("Botão de download já visível.")
+        return page.locator(seletor_botao).first
 
-    # Aguarda o elemento existir e estar visível
+    # Tenta clicar em "Consultar"
+    print("Botão de download não visível. Clicando em 'Consultar'...")
+    seletor_consultar = '#btn-consultar-top'
+    if page.locator(seletor_consultar).count() == 0:
+        seletor_consultar = 'button:has-text("Consultar")'
     try:
-        page.wait_for_selector(seletor, state="visible", timeout=30000)
+        page.locator(seletor_consultar).first.click()
+        # Aguarda o botão de download aparecer
+        page.wait_for_selector(seletor_botao, state="visible", timeout=60000)
+        return page.locator(seletor_botao).first
     except Exception as e:
-        raise Exception(f"Botão de download não encontrado ou não visível: {e}")
+        # Se ainda não aparecer, tenta um último recurso: recarregar a página ou clicar novamente
+        print(f"Falha ao clicar em Consultar ou esperar botão: {e}")
+        # Tenta recarregar a página (se for o caso)
+        # page.reload()
+        # time.sleep(3)
+        raise Exception(f"Não foi possível tornar o botão de download visível: {e}")
 
-    elemento = page.locator(seletor).first
-
-    # Verifica se está habilitado (se tiver atributo disabled)
-    if elemento.get_attribute('disabled') is not None:
-        raise Exception("Botão de download está desabilitado.")
-
-    # Tenta rolar para a viewport
-    elemento.scroll_into_view_if_needed()
+def clicar_download(page, botao_elemento, descricao):
+    """
+    Tenta clicar no elemento de download usando clique normal e, se falhar, via JavaScript.
+    """
+    # Rola para o elemento
+    botao_elemento.scroll_into_view_if_needed()
     time.sleep(0.5)
 
     # Tenta clique normal
     try:
         with page.expect_download(timeout=15000) as download_info:
-            elemento.click()
+            botao_elemento.click()
         download = download_info.value
         destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
         if os.path.exists(destino):
             os.remove(destino)
         download.save_as(destino)
-        print(f"Download realizado com sucesso: {destino}")
+        print(f"Download realizado: {destino}")
         return
     except Exception as e:
-        print(f"Clique normal falhou: {e}. Tentando clique via JavaScript...")
+        print(f"Clique normal falhou: {e}. Tentando via JavaScript...")
 
-    # Tenta clique via JavaScript como fallback
+    # Fallback via JavaScript
     try:
         with page.expect_download(timeout=15000) as download_info:
-            page.evaluate('(el) => el.click()', elemento)
+            page.evaluate('(el) => el.click()', botao_elemento)
         download = download_info.value
         destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
         if os.path.exists(destino):
             os.remove(destino)
         download.save_as(destino)
-        print(f"Download via JavaScript realizado com sucesso: {destino}")
+        print(f"Download via JavaScript realizado: {destino}")
         return
     except Exception as e:
-        raise Exception(f"Falha ao clicar no download mesmo via JavaScript: {e}")
+        raise Exception(f"Download falhou mesmo via JavaScript: {e}")
 
 def baixar_arquivo(page, descricao):
-    clicar_download_com_validacao(page, descricao)
+    botao = garantir_botao_download_visivel(page, descricao)
+    clicar_download(page, botao, descricao)
 
 def acessar_asel_e_baixar(page, descricao):
-    # Seletor exato para o ASEL
     seletor_asel = 'div.itemNavegacao:has-text("ASEL")'
     try:
         page.wait_for_selector(seletor_asel, state="visible", timeout=30000)
     except Exception as e:
-        raise Exception(f"Elemento ASEL não encontrado ou não visível: {e}")
-
+        raise Exception(f"ASEL não encontrado: {e}")
     asel = page.locator(seletor_asel).first
     asel.scroll_into_view_if_needed()
     time.sleep(0.5)
     asel.click()
-
-    # Aguarda a página ASEL carregar
     page.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(3)
 
-    # Agora tenta baixar novamente (botão de download na página ASEL)
-    # O seletor é o mesmo, mas pode haver mais de um; pegamos o primeiro visível
-    clicar_download_com_validacao(page, descricao + "_ASEL")
+    # Na página ASEL, pode ser necessário clicar em Consultar
+    # Usamos a mesma função de garantia
+    baixar_arquivo(page, descricao + "_ASEL")
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -241,8 +252,10 @@ def main():
 
                 preencher_otp_e_concluir(page, codigo)
 
-                # Navega para Custo Selic e baixa
+                # Navega para Custo Selic
                 navegar_ate_custo_selic(page)
+
+                # Baixa o primeiro arquivo (já inclui a garantia de visibilidade)
                 print("Baixando Custo Selic...")
                 baixar_arquivo(page, descricao)
 
@@ -265,7 +278,7 @@ def main():
 
                 print("\n--- O script será interrompido devido ao erro ---")
                 traceback.print_exc()
-                raise  # Interrompe a execução
+                raise
 
             finally:
                 context.close()
