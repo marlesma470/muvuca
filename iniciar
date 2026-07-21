@@ -3,6 +3,9 @@
 # Script completo para automatizar o acesso ao portal SELIC, extração do
 # código de e-mail, download dos arquivos Custo Selic e ASEL, repetindo para
 # múltiplas credenciais.
+# 
+# ALTERAÇÃO IMPORTANTE: OS ARQUIVOS SEMPRE SERÃO SALVOS NA PASTA "DOWNLOADS"
+# DO USUÁRIO (C:\Users\[Usuario]\Downloads)
 # =============================================================================
 
 import os
@@ -17,11 +20,8 @@ import win32com.client
 # CONFIGURAÇÕES GERAIS
 # -----------------------------------------------------------------------------
 
-# Pasta onde serão salvos os downloads (ajuste conforme sua necessidade)
-DOWNLOAD_DIR = r"\\nas03\adm_custodia\custodia\Planilhas\Indexadores"
-# Se a rede não estiver disponível, usa a pasta Downloads do usuário
-if not os.path.exists(DOWNLOAD_DIR):
-    DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
+# PASTA DE DOWNLOAD DEFINITIVA: Sempre a pasta "Downloads" do usuário
+DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # Tempo máximo de espera para o e-mail (segundos)
@@ -184,7 +184,7 @@ def baixar_arquivo(page, timeout=60000):
             pass
 
     download.save_as(destino)
-    print(f"Arquivo baixado: {destino}")
+    print(f"Arquivo baixado em: {destino}")
     return destino
 
 def acessar_asel_e_baixar(page):
@@ -214,6 +214,8 @@ def main():
         ("Selic BRC", "33737818"),
         ("Selic PR", "80230774"),
     ]
+
+    print(f"Todos os arquivos serão salvos em: {DOWNLOAD_DIR}")
 
     # Inicia o Playwright
     with sync_playwright() as p:
