@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO ULTRA ROBUSTA
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM INTERCEPTAÇÃO DE REQUISIÇÃO
 # =============================================================================
 
 import os
@@ -114,131 +114,134 @@ def navegar_ate_custo_selic(page):
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
     page.wait_for_load_state("networkidle", timeout=60000)
-    # Aguarda a presença do texto "Extrato de custo Selic" para garantir que a página carregou
     page.wait_for_selector('h1:has-text("Extrato de custo Selic")', timeout=30000)
     time.sleep(2)
 
-def baixar_arquivo(page, descricao):
-    """
-    Tenta múltiplas estratégias para clicar no botão de download.
-    """
-    # Lista de seletores possíveis (do mais específico para o mais genérico)
-    seletores = [
-        'button.linkAcaoIcone.iconeBaixar[title="Download"]',
-        'button.linkAcaoIcone.iconeBaixar',
-        'button[title="Download"][aria-label="Download"]',
-        'button[title="Download"]',
-        '[aria-label="Download"]',
-        '.iconeBaixar',
-        '.linkAcaoIcone',
-        'td button.linkAcaoIcone',
-        'tr button.linkAcaoIcone'
-    ]
+# -----------------------------------------------------------------------------
+# FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO
+# -----------------------------------------------------------------------------
 
-    # Primeiro, espera a tabela ou algum indicador de que os dados foram carregados
+def baixar_arquivo_por_interceptacao(page, descricao):
+    """
+    Tenta baixar o arquivo interceptando a requisição de download.
+    Estratégias:
+    1. Clica no botão e captura a requisição com wait_for_response.
+    2. Se falhar, extrai o ticket do HTML e constrói a URL.
+    3. Se falhar, tenta forçar o clique via JavaScript.
+    """
+    # Padrão da URL de download
+    url_pattern = "https://www.rtm.selic.gov.br/extrato-selic-spring/rest/extrato-custo-selic-pdf/pdf/download?ticket="
+
+    # ---- ESTRATÉGIA 1: Clique + captura de resposta ----
     try:
-        page.wait_for_selector('table.cdk-table', timeout=30000)
-    except:
-        pass  # Não é crítico
-
-    elemento = None
-    for seletor in seletores:
-        try:
+        # Configura o listener para capturar a resposta da requisição de download
+        with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=15000) as response_info:
+            # Tenta clicar no botão de download usando o seletor mais específico
+            seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
             if page.locator(seletor).count() > 0:
-                el = page.locator(seletor).first
-                if el.is_visible(timeout=2000):
-                    elemento = el
-                    print(f"Seletor encontrado e visível: {seletor}")
-                    break
-        except:
-            continue
+                page.locator(seletor).first.click(force=True, timeout=5000)
+            else:
+                # Fallback: tenta qualquer elemento com título Download
+                page.locator('[title="Download"]').first.click(force=True, timeout=5000)
+        response = response_info.value
+        download_url = response.url
+        print(f"Requisição de download capturada: {download_url}")
 
-    # Se não encontrou nenhum visível, tenta forçar clique no primeiro encontrado (mesmo se não visível)
-    if not elemento:
-        for seletor in seletores:
-            try:
-                if page.locator(seletor).count() > 0:
-                    elemento = page.locator(seletor).first
-                    print(f"Seletor encontrado (forçando): {seletor}")
-                    break
-            except:
-                continue
+        # Agora baixa o arquivo a partir da URL
+        return baixar_por_url(page, download_url, descricao)
+    except Exception as e:
+        print(f"Estratégia 1 (clique + captura) falhou: {e}")
 
-    if not elemento:
-        # Último recurso: tenta qualquer elemento com título Download
-        try:
-            elementos = page.locator('[title="Download"]')
-            if elementos.count() > 0:
-                elemento = elementos.first
-                print("Usando elemento genérico com title='Download'")
-        except:
-            pass
-
-    if not elemento:
-        raise Exception("Nenhum botão de download encontrado na página.")
-
-    # Agora tenta clicar
-    # Estratégia 1: Rolar e clicar normalmente
+    # ---- ESTRATÉGIA 2: Extrair ticket do HTML ----
     try:
-        elemento.scroll_into_view_if_needed()
-        time.sleep(0.5)
-        with page.expect_download(timeout=15000) as download_info:
-            elemento.click()
+        # Procura por um script ou elemento que contenha o ticket
+        # Às vezes o ticket está em um atributo 'data-ticket' ou em um input hidden
+        ticket = page.evaluate('''
+            () => {
+                // Procura em elementos com data-ticket
+                const el = document.querySelector('[data-ticket]');
+                if (el) return el.dataset.ticket;
+                // Procura em inputs hidden com name='ticket'
+                const input = document.querySelector('input[name="ticket"]');
+                if (input) return input.value;
+                // Procura em localStorage
+                const ls = localStorage.getItem('ticket');
+                if (ls) return ls;
+                // Tenta extrair da URL de algum link
+                const links = document.querySelectorAll('a[href*="ticket="]');
+                for (let a of links) {
+                    const match = a.href.match(/ticket=([^&]+)/);
+                    if (match) return match[1];
+                }
+                return null;
+            }
+        ''')
+        if ticket:
+            download_url = f"{url_pattern}{ticket}"
+            print(f"Ticket extraído do HTML: {ticket}")
+            return baixar_por_url(page, download_url, descricao)
+    except Exception as e:
+        print(f"Estratégia 2 (extrair ticket) falhou: {e}")
+
+    # ---- ESTRATÉGIA 3: Tentar clicar via JavaScript com mais eventos ----
+    try:
+        seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+        if page.locator(seletor).count() == 0:
+            seletor = '[title="Download"]'
+        elemento = page.locator(seletor).first
+        # Disparar eventos manualmente
+        page.evaluate('''
+            (el) => {
+                const events = ['mousedown', 'mouseup', 'click'];
+                events.forEach(eventType => {
+                    const event = new MouseEvent(eventType, { bubbles: true, cancelable: true });
+                    el.dispatchEvent(event);
+                });
+            }
+        ''', elemento)
+        # Aguarda um pouco para a requisição ser feita
+        time.sleep(3)
+        # Tenta capturar a resposta com um listener mais longo
+        with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=10000) as response_info:
+            # Se o clique já foi feito, a resposta pode já ter chegado, mas esperamos
+            pass
+        response = response_info.value
+        download_url = response.url
+        print(f"Requisição capturada após eventos manuais: {download_url}")
+        return baixar_por_url(page, download_url, descricao)
+    except Exception as e:
+        print(f"Estratégia 3 (eventos manuais) falhou: {e}")
+
+    # Se todas falharem, erro
+    raise Exception("Não foi possível obter a URL de download.")
+
+def baixar_por_url(page, url, descricao):
+    """
+    Baixa o arquivo a partir de uma URL, criando um link no DOM e clicando nele.
+    """
+    try:
+        # Cria um elemento <a> com a URL e clica
+        page.evaluate(f'''
+            const a = document.createElement('a');
+            a.href = '{url}';
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        ''')
+        # Aguarda o download
+        with page.expect_download(timeout=30000) as download_info:
+            pass
         download = download_info.value
-        destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
+        nome_original = download.suggested_filename
+        destino = os.path.join(DOWNLOAD_DIR, nome_original)
         if os.path.exists(destino):
             os.remove(destino)
         download.save_as(destino)
         print(f"Download realizado com sucesso: {destino}")
-        return
+        return destino
     except Exception as e:
-        print(f"Clique normal falhou: {e}")
-
-    # Estratégia 2: Clique via JavaScript
-    try:
-        with page.expect_download(timeout=15000) as download_info:
-            page.evaluate('(el) => el.click()', elemento)
-        download = download_info.value
-        destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
-        if os.path.exists(destino):
-            os.remove(destino)
-        download.save_as(destino)
-        print(f"Download via JavaScript realizado: {destino}")
-        return
-    except Exception as e:
-        print(f"Clique via JavaScript falhou: {e}")
-
-    # Estratégia 3: Clicar no elemento pai (td) ou na linha
-    try:
-        parent = elemento.locator('xpath=..')
-        if parent.count() > 0:
-            with page.expect_download(timeout=15000) as download_info:
-                parent.first.click()
-            download = download_info.value
-            destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
-            if os.path.exists(destino):
-                os.remove(destino)
-            download.save_as(destino)
-            print(f"Download via clique no pai realizado: {destino}")
-            return
-    except Exception as e:
-        print(f"Clique no pai falhou: {e}")
-
-    # Estratégia 4: Forçar clique com force=True (ignora visibilidade)
-    try:
-        with page.expect_download(timeout=15000) as download_info:
-            elemento.click(force=True)
-        download = download_info.value
-        destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
-        if os.path.exists(destino):
-            os.remove(destino)
-        download.save_as(destino)
-        print(f"Download com force=True realizado: {destino}")
-        return
-    except Exception as e:
-        print(f"Clique com force=True falhou: {e}")
-
-    raise Exception("Todas as tentativas de clique falharam.")
+        raise Exception(f"Falha ao baixar a partir da URL: {e}")
 
 def acessar_asel_e_baixar(page, descricao):
     seletor_asel = 'div.itemNavegacao:has-text("ASEL")'
@@ -252,7 +255,8 @@ def acessar_asel_e_baixar(page, descricao):
     asel.click()
     page.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-    baixar_arquivo(page, descricao + "_ASEL")
+    # Na página ASEL, o download pode ter uma URL ligeiramente diferente, mas o padrão é o mesmo
+    baixar_arquivo_por_interceptacao(page, descricao + "_ASEL")
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -305,7 +309,7 @@ def main():
 
                 navegar_ate_custo_selic(page)
                 print("Baixando Custo Selic...")
-                baixar_arquivo(page, descricao)
+                baixar_arquivo_por_interceptacao(page, descricao)
 
                 print("Acessando ASEL...")
                 acessar_asel_e_baixar(page, descricao)
