@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM SELETORES ROBUSTOS
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM SELETORES ESPECÍFICOS
 # =============================================================================
 
 import os
@@ -120,12 +120,12 @@ def navegar_ate_custo_selic(page):
     page.click('a:has-text("Extrato")')
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
-    # Aguarda o botão de download estar visível
-    page.wait_for_selector('button[title="Download"]', timeout=30000)
+    # Aguarda o botão de download específico (linkAcaoIcone iconeBaixar)
+    page.wait_for_selector('button.linkAcaoIcone.iconeBaixar', timeout=30000)
 
 def baixar_arquivo(page):
-    # Usa um seletor mais específico: button com title="Download" e classe linkAcao
-    download_button = page.locator('button[title="Download"].linkAcao')
+    # Seletor específico: botão com classe linkAcaoIcone e iconeBaixar e título Download
+    download_button = page.locator('button.linkAcaoIcone.iconeBaixar[title="Download"]')
     download_button.first.wait_for(state="visible", timeout=30000)
     with page.expect_download(timeout=60000) as download_info:
         download_button.first.click()
@@ -138,12 +138,18 @@ def baixar_arquivo(page):
     return destino
 
 def acessar_asel_e_baixar(page):
-    # Localiza o elemento ASEL usando o texto exato dentro da div com classe itemNavegacao
+    # Localiza o elemento ASEL exato
     asel = page.locator('div.itemNavegacao:has-text("ASEL")')
     asel.first.wait_for(state="visible", timeout=30000)
     asel.first.click()
-    # Aguarda a nova página e o botão de download
-    page.wait_for_selector('button[title="Download"].linkAcao', timeout=30000)
+    
+    # Aguarda a nova página carregar completamente
+    page.wait_for_load_state("networkidle", timeout=30000)
+    page.wait_for_timeout(3000)  # pequeno delay extra
+    
+    # Aguarda o botão de download específico (pode ser o mesmo seletor)
+    page.wait_for_selector('button.linkAcaoIcone.iconeBaixar[title="Download"]', timeout=30000)
+    # Baixa o arquivo
     baixar_arquivo(page)
 
 # -----------------------------------------------------------------------------
@@ -208,6 +214,12 @@ def main():
 
             except Exception as e:
                 print(f"ERRO: {e}")
+                # Salva screenshot para diagnóstico
+                try:
+                    page.screenshot(path=f"erro_{descricao.replace(' ', '_')}.png")
+                    print(f"Screenshot salvo: erro_{descricao.replace(' ', '_')}.png")
+                except:
+                    pass
                 traceback.print_exc()
             finally:
                 context.close()
