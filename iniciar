@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM IFRAME
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM TIME OUTS AJUSTADOS
 # =============================================================================
 
 import os
@@ -17,9 +17,13 @@ import win32com.client
 DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-TEMPO_ESPERA_INICIAL = 15
-TEMPO_MAXIMO_BUSCA = 60
+TEMPO_ESPERA_INICIAL = 15       # Aguarda após login antes de buscar e-mail
+TEMPO_MAXIMO_BUSCA = 60         # Busca e-mail por até 60 segundos
 INTERVALO_VERIFICACAO = 5
+
+# --- TEMPOS DE DOWNLOAD (AUMENTADOS) ---
+TIMEOUT_CAPTURA_RESPOSTA = 30000   # 30 segundos para capturar a requisição
+TIMEOUT_DOWNLOAD_COMPLETO = 60000  # 60 segundos para baixar o arquivo
 
 # -----------------------------------------------------------------------------
 # LEITURA DE CREDENCIAIS
@@ -110,21 +114,16 @@ def preencher_otp_e_concluir(page, codigo):
         page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
 
 def navegar_ate_custo_selic(page):
-    # Clica em Extrato
     page.click('a:has-text("Extrato")')
-    # Aguarda o submenu e clica em Custo Selic
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
-    # Aguarda o iframe carregar (o src contém "custo-selic")
     page.wait_for_selector('iframe#conteudo[src*="custo-selic"]', timeout=60000)
-    # Aguarda o carregamento do conteúdo do iframe
     time.sleep(3)
 
 def obter_frame(page):
     """Retorna o frame principal onde está o conteúdo do Custo Selic."""
     frame = page.frame(name="conteudo") or page.frame(url=re.compile(r"custo-selic"))
     if not frame:
-        # Fallback: qualquer iframe que contenha "custo-selic" no src
         for f in page.frames:
             if f.url and "custo-selic" in f.url:
                 frame = f
@@ -134,41 +133,41 @@ def obter_frame(page):
     return frame
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO (DENTRO DO IFRAME)
+# FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO (COM TIMEOUTS AUMENTADOS)
 # -----------------------------------------------------------------------------
 
-def baixar_arquivo_por_interceptacao(page, descricao, frame=None):
+def baixar_arquivo_por_interceptacao(page, descricao, frame=None, timeout_captura=TIMEOUT_CAPTURA_RESPOSTA):
     """
     Tenta baixar o arquivo usando interceptação de requisição.
-    Se frame for None, tenta obter automaticamente.
+    Aguarda até timeout_captura milissegundos pela resposta.
     """
     if frame is None:
         frame = obter_frame(page)
 
-    # Padrão da URL de download
     url_pattern = "https://www.rtm.selic.gov.br/extrato-selic-spring/rest/extrato-custo-selic-pdf/pdf/download?ticket="
 
-    # ---- ESTRATÉGIA 1: Clique no botão dentro do frame + captura de resposta ----
+    # ---- ESTRATÉGIA 1: Clique no botão + captura de resposta ----
     try:
-        # Localiza o botão de download dentro do frame
         seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-        if frame.locator(seletor).count() > 0:
-            elemento = frame.locator(seletor).first
-        else:
-            # Tenta seletor genérico
-            elemento = frame.locator('[title="Download"]').first
+        if frame.locator(seletor).count() == 0:
+            seletor = '[title="Download"]'
+        elemento = frame.locator(seletor).first
 
-        print("Tentando clicar no botão de download dentro do iframe...")
-        with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=15000) as response_info:
+        print(f"Aguardando até {timeout_captura/1000} segundos pela resposta de download...")
+        with page.expect_response(
+            lambda response: response.url.startswith(url_pattern) and response.status == 200,
+            timeout=timeout_captura
+        ) as response_info:
             elemento.click(force=True, timeout=5000)
+
         response = response_info.value
         download_url = response.url
         print(f"Requisição de download capturada: {download_url}")
         return baixar_por_url(page, download_url, descricao)
     except Exception as e:
-        print(f"Estratégia 1 (clique no frame) falhou: {e}")
+        print(f"Estratégia 1 falhou: {e}")
 
-    # ---- ESTRATÉGIA 2: Extrair ticket do HTML dentro do frame ----
+    # ---- ESTRATÉGIA 2: Extrair ticket do HTML ----
     try:
         ticket = frame.evaluate('''
             () => {
@@ -188,12 +187,12 @@ def baixar_arquivo_por_interceptacao(page, descricao, frame=None):
         ''')
         if ticket:
             download_url = f"{url_pattern}{ticket}"
-            print(f"Ticket extraído do HTML do iframe: {ticket}")
+            print(f"Ticket extraído: {ticket}")
             return baixar_por_url(page, download_url, descricao)
     except Exception as e:
-        print(f"Estratégia 2 (extrair ticket) falhou: {e}")
+        print(f"Estratégia 2 falhou: {e}")
 
-    # ---- ESTRATÉGIA 3: Tentar clicar via JavaScript com eventos manuais ----
+    # ---- ESTRATÉGIA 3: Eventos manuais ----
     try:
         seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
         if frame.locator(seletor).count() == 0:
@@ -209,22 +208,23 @@ def baixar_arquivo_por_interceptacao(page, descricao, frame=None):
             }
         ''', elemento)
         time.sleep(2)
-        with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=10000) as response_info:
-            # Já foi disparado, apenas espera a resposta
+        with page.expect_response(
+            lambda response: response.url.startswith(url_pattern) and response.status == 200,
+            timeout=timeout_captura
+        ) as response_info:
             pass
         response = response_info.value
         download_url = response.url
-        print(f"Requisição capturada após eventos manuais: {download_url}")
+        print(f"Requisição capturada após eventos: {download_url}")
         return baixar_por_url(page, download_url, descricao)
     except Exception as e:
-        print(f"Estratégia 3 (eventos manuais) falhou: {e}")
+        print(f"Estratégia 3 falhou: {e}")
 
     raise Exception("Não foi possível obter a URL de download.")
 
 def baixar_por_url(page, url, descricao):
-    """Baixa o arquivo a partir de uma URL, criando um link no DOM da página principal."""
+    """Baixa o arquivo a partir de uma URL com timeout estendido."""
     try:
-        # Cria um link <a> na página principal (não no frame) para evitar problemas de cross-origin
         page.evaluate(f'''
             const a = document.createElement('a');
             a.href = '{url}';
@@ -233,7 +233,7 @@ def baixar_por_url(page, url, descricao):
             a.click();
             a.remove();
         ''')
-        with page.expect_download(timeout=30000) as download_info:
+        with page.expect_download(timeout=TIMEOUT_DOWNLOAD_COMPLETO) as download_info:
             pass
         download = download_info.value
         nome_original = download.suggested_filename
@@ -241,33 +241,26 @@ def baixar_por_url(page, url, descricao):
         if os.path.exists(destino):
             os.remove(destino)
         download.save_as(destino)
-        print(f"Download realizado com sucesso: {destino}")
+        print(f"Download realizado: {destino}")
         return destino
     except Exception as e:
-        raise Exception(f"Falha ao baixar a partir da URL: {e}")
+        raise Exception(f"Falha ao baixar: {e}")
 
 def acessar_asel_e_baixar(page, descricao):
-    # Obtém o frame atual
     frame = obter_frame(page)
-
-    # Clica no ASEL dentro do frame
     seletor_asel = 'div.itemNavegacao:has-text("ASEL")'
     try:
         frame.wait_for_selector(seletor_asel, state="visible", timeout=30000)
     except Exception as e:
-        raise Exception(f"ASEL não encontrado dentro do iframe: {e}")
-
+        raise Exception(f"ASEL não encontrado: {e}")
     asel = frame.locator(seletor_asel).first
     asel.scroll_into_view_if_needed()
     time.sleep(0.5)
     asel.click()
-
-    # Aguarda o carregamento da página ASEL (dentro do mesmo iframe)
     time.sleep(3)
     frame.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-
-    # Baixa o arquivo ASEL (usa o mesmo método, mas agora o ticket pode ser diferente)
+    # Baixa o arquivo ASEL com o mesmo timeout
     baixar_arquivo_por_interceptacao(page, descricao + "_ASEL", frame=frame)
 
 # -----------------------------------------------------------------------------
@@ -285,7 +278,8 @@ def main():
     ]
 
     print(f"Downloads em: {DOWNLOAD_DIR}")
-    print(f"Aguardando {TEMPO_ESPERA_INICIAL}s após login para buscar o e-mail.\n")
+    print(f"Timeout para captura de resposta: {TIMEOUT_CAPTURA_RESPOSTA/1000}s")
+    print(f"Timeout para conclusão do download: {TIMEOUT_DOWNLOAD_COMPLETO/1000}s\n")
 
     with sync_playwright() as p:
         for descricao, iselic in credenciais:
@@ -334,12 +328,12 @@ def main():
                     nome_imagem = f"erro_{descricao.replace(' ', '_')}_{int(time.time())}.png"
                     page.screenshot(path=nome_imagem)
                     caminho_completo = os.path.abspath(nome_imagem)
-                    print(f"Screenshot salvo em: {caminho_completo}")
+                    print(f"Screenshot salvo: {caminho_completo}")
                     subprocess.run(["start", caminho_completo], shell=True)
                 except Exception as ex:
                     print(f"Não foi possível salvar/abrir screenshot: {ex}")
 
-                print("\n--- O script será interrompido devido ao erro ---")
+                print("\n--- O script será interrompido ---")
                 traceback.print_exc()
                 raise
 
