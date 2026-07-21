@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO SEM CLIQUE EM CONSULTAR
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO ULTRA ROBUSTA
 # =============================================================================
 
 import os
@@ -113,28 +113,75 @@ def navegar_ate_custo_selic(page):
     page.click('a:has-text("Extrato")')
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
-    # Aguarda o carregamento automático da página (os dados carregam sozinhos)
     page.wait_for_load_state("networkidle", timeout=60000)
-    # Pequena pausa extra para garantir que o botão de download seja renderizado
+    # Aguarda a presença do texto "Extrato de custo Selic" para garantir que a página carregou
+    page.wait_for_selector('h1:has-text("Extrato de custo Selic")', timeout=30000)
     time.sleep(2)
 
 def baixar_arquivo(page, descricao):
     """
-    Aguarda o botão de download ficar visível e clica nele.
+    Tenta múltiplas estratégias para clicar no botão de download.
     """
-    seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-    try:
-        # Aguarda o botão estar visível (a página carrega automaticamente)
-        page.wait_for_selector(seletor, state="visible", timeout=30000)
-    except Exception as e:
-        raise Exception(f"Botão de download não ficou visível após carregamento: {e}")
+    # Lista de seletores possíveis (do mais específico para o mais genérico)
+    seletores = [
+        'button.linkAcaoIcone.iconeBaixar[title="Download"]',
+        'button.linkAcaoIcone.iconeBaixar',
+        'button[title="Download"][aria-label="Download"]',
+        'button[title="Download"]',
+        '[aria-label="Download"]',
+        '.iconeBaixar',
+        '.linkAcaoIcone',
+        'td button.linkAcaoIcone',
+        'tr button.linkAcaoIcone'
+    ]
 
-    elemento = page.locator(seletor).first
-    elemento.scroll_into_view_if_needed()
-    time.sleep(0.5)
-
-    # Tenta clique normal
+    # Primeiro, espera a tabela ou algum indicador de que os dados foram carregados
     try:
+        page.wait_for_selector('table.cdk-table', timeout=30000)
+    except:
+        pass  # Não é crítico
+
+    elemento = None
+    for seletor in seletores:
+        try:
+            if page.locator(seletor).count() > 0:
+                el = page.locator(seletor).first
+                if el.is_visible(timeout=2000):
+                    elemento = el
+                    print(f"Seletor encontrado e visível: {seletor}")
+                    break
+        except:
+            continue
+
+    # Se não encontrou nenhum visível, tenta forçar clique no primeiro encontrado (mesmo se não visível)
+    if not elemento:
+        for seletor in seletores:
+            try:
+                if page.locator(seletor).count() > 0:
+                    elemento = page.locator(seletor).first
+                    print(f"Seletor encontrado (forçando): {seletor}")
+                    break
+            except:
+                continue
+
+    if not elemento:
+        # Último recurso: tenta qualquer elemento com título Download
+        try:
+            elementos = page.locator('[title="Download"]')
+            if elementos.count() > 0:
+                elemento = elementos.first
+                print("Usando elemento genérico com title='Download'")
+        except:
+            pass
+
+    if not elemento:
+        raise Exception("Nenhum botão de download encontrado na página.")
+
+    # Agora tenta clicar
+    # Estratégia 1: Rolar e clicar normalmente
+    try:
+        elemento.scroll_into_view_if_needed()
+        time.sleep(0.5)
         with page.expect_download(timeout=15000) as download_info:
             elemento.click()
         download = download_info.value
@@ -145,9 +192,9 @@ def baixar_arquivo(page, descricao):
         print(f"Download realizado com sucesso: {destino}")
         return
     except Exception as e:
-        print(f"Clique normal falhou: {e}. Tentando clique via JavaScript...")
+        print(f"Clique normal falhou: {e}")
 
-    # Fallback via JavaScript
+    # Estratégia 2: Clique via JavaScript
     try:
         with page.expect_download(timeout=15000) as download_info:
             page.evaluate('(el) => el.click()', elemento)
@@ -156,28 +203,55 @@ def baixar_arquivo(page, descricao):
         if os.path.exists(destino):
             os.remove(destino)
         download.save_as(destino)
-        print(f"Download via JavaScript realizado com sucesso: {destino}")
+        print(f"Download via JavaScript realizado: {destino}")
         return
     except Exception as e:
-        raise Exception(f"Falha ao clicar no download: {e}")
+        print(f"Clique via JavaScript falhou: {e}")
+
+    # Estratégia 3: Clicar no elemento pai (td) ou na linha
+    try:
+        parent = elemento.locator('xpath=..')
+        if parent.count() > 0:
+            with page.expect_download(timeout=15000) as download_info:
+                parent.first.click()
+            download = download_info.value
+            destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
+            if os.path.exists(destino):
+                os.remove(destino)
+            download.save_as(destino)
+            print(f"Download via clique no pai realizado: {destino}")
+            return
+    except Exception as e:
+        print(f"Clique no pai falhou: {e}")
+
+    # Estratégia 4: Forçar clique com force=True (ignora visibilidade)
+    try:
+        with page.expect_download(timeout=15000) as download_info:
+            elemento.click(force=True)
+        download = download_info.value
+        destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
+        if os.path.exists(destino):
+            os.remove(destino)
+        download.save_as(destino)
+        print(f"Download com force=True realizado: {destino}")
+        return
+    except Exception as e:
+        print(f"Clique com force=True falhou: {e}")
+
+    raise Exception("Todas as tentativas de clique falharam.")
 
 def acessar_asel_e_baixar(page, descricao):
     seletor_asel = 'div.itemNavegacao:has-text("ASEL")'
     try:
         page.wait_for_selector(seletor_asel, state="visible", timeout=30000)
     except Exception as e:
-        raise Exception(f"Elemento ASEL não encontrado: {e}")
-
+        raise Exception(f"ASEL não encontrado: {e}")
     asel = page.locator(seletor_asel).first
     asel.scroll_into_view_if_needed()
     time.sleep(0.5)
     asel.click()
-
-    # Aguarda o carregamento da página ASEL (dados carregam automaticamente)
     page.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-
-    # Agora baixa o arquivo ASEL (mesmo seletor de download)
     baixar_arquivo(page, descricao + "_ASEL")
 
 # -----------------------------------------------------------------------------
@@ -229,12 +303,10 @@ def main():
 
                 preencher_otp_e_concluir(page, codigo)
 
-                # Navega para Custo Selic e baixa
                 navegar_ate_custo_selic(page)
                 print("Baixando Custo Selic...")
                 baixar_arquivo(page, descricao)
 
-                # Acessa ASEL e baixa
                 print("Acessando ASEL...")
                 acessar_asel_e_baixar(page, descricao)
 
