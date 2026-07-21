@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM TRATAMENTO SSO
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM SELETORES ROBUSTOS
 # =============================================================================
 
 import os
@@ -82,10 +82,9 @@ def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_V
 # -----------------------------------------------------------------------------
 
 def fazer_login(page, iselic, login, senha):
-    # Vai para a página inicial do portal
     page.goto("https://www.rtm.selic.gov.br/portal-selic/", wait_until="networkidle", timeout=60000)
 
-    # Clica no botão "Entrar" (pode ter texto diferente, tenta vários)
+    # Clica no botão "Entrar"
     try:
         page.click('a:has-text("Entrar")')
     except:
@@ -94,51 +93,42 @@ def fazer_login(page, iselic, login, senha):
         except:
             page.click('a[href*="login"]')
 
-    # Aguarda o formulário de login carregar
     page.wait_for_selector('#iselic', timeout=30000)
-
-    # Preenche os campos
     page.fill('#iselic', iselic)
     page.fill('#userselic', login)
     page.fill('#password', senha)
-
-    # Clica no botão de login
     page.click('#kc-login')
-
-    # Aguarda o campo OTP aparecer (indica que o login foi submetido)
     page.wait_for_selector('#otp', timeout=30000)
 
 def preencher_otp_e_concluir(page, codigo):
-    # Preenche e envia o OTP
     page.fill('#otp', codigo)
     page.click('#kc-login')
 
-    # Aguarda um pouco para a página carregar
+    # Aguarda a página carregar
     page.wait_for_timeout(5000)
 
-    # Verifica se a página intermediária com link SSO apareceu
+    # Verifica se a página SSO intermediária apareceu
     if page.locator('a[href="/portal-selic/oauth2/authorization/sso"]').count() > 0:
-        print("Página intermediária SSO detectada. Clicando no link...")
+        print("Página SSO detectada. Clicando no link...")
         page.click('a[href="/portal-selic/oauth2/authorization/sso"]')
-        # Aguarda a página principal carregar
         page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
     else:
-        # Já está na página principal? Aguarda o link Extrato
         page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
 
 def navegar_ate_custo_selic(page):
     # Clica em Extrato
     page.click('a:has-text("Extrato")')
-    # Aguarda o link Custo Selic
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
-    # Clica em Custo Selic
     page.click('a[href*="custo-selic"]')
-    # Aguarda o botão de download
+    # Aguarda o botão de download estar visível
     page.wait_for_selector('button[title="Download"]', timeout=30000)
 
 def baixar_arquivo(page):
+    # Usa um seletor mais específico: button com title="Download" e classe linkAcao
+    download_button = page.locator('button[title="Download"].linkAcao')
+    download_button.first.wait_for(state="visible", timeout=30000)
     with page.expect_download(timeout=60000) as download_info:
-        page.locator('button[title="Download"]').first.click()
+        download_button.first.click()
     download = download_info.value
     destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
     if os.path.exists(destino):
@@ -148,9 +138,12 @@ def baixar_arquivo(page):
     return destino
 
 def acessar_asel_e_baixar(page):
-    page.locator('div.itemNavegacao:has-text("ASEL")').wait_for(timeout=30000)
-    page.locator('div.itemNavegacao:has-text("ASEL")').click()
-    page.wait_for_selector('button[title="Download"]', timeout=30000)
+    # Localiza o elemento ASEL usando o texto exato dentro da div com classe itemNavegacao
+    asel = page.locator('div.itemNavegacao:has-text("ASEL")')
+    asel.first.wait_for(state="visible", timeout=30000)
+    asel.first.click()
+    # Aguarda a nova página e o botão de download
+    page.wait_for_selector('button[title="Download"].linkAcao', timeout=30000)
     baixar_arquivo(page)
 
 # -----------------------------------------------------------------------------
@@ -182,7 +175,7 @@ def main():
 
             browser = p.chromium.launch(
                 channel="msedge",
-                headless=False,  # True se quiser rodar em background
+                headless=False,
                 args=["--disable-blink-features=AutomationControlled"]
             )
             context = browser.new_context(accept_downloads=True, ignore_https_errors=True)
@@ -202,11 +195,12 @@ def main():
 
                 preencher_otp_e_concluir(page, codigo)
 
-                # Agora já estamos na página principal
+                # Navega para Custo Selic e baixa
                 navegar_ate_custo_selic(page)
                 print("Baixando Custo Selic...")
                 baixar_arquivo(page)
 
+                # Acessa ASEL e baixa
                 print("Acessando ASEL...")
                 acessar_asel_e_baixar(page)
 
