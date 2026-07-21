@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM INTERCEPTAÇÃO DE REQUISIÇÃO
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - CORREÇÃO DA NAVEGAÇÃO
 # =============================================================================
 
 import os
@@ -110,12 +110,44 @@ def preencher_otp_e_concluir(page, codigo):
         page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
 
 def navegar_ate_custo_selic(page):
+    # Clica em Extrato
     page.click('a:has-text("Extrato")')
+    # Aguarda o link Custo Selic
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
+    # Aguarda o carregamento da página (pode levar tempo por causa do Angular)
     page.wait_for_load_state("networkidle", timeout=60000)
-    page.wait_for_selector('h1:has-text("Extrato de custo Selic")', timeout=30000)
-    time.sleep(2)
+    time.sleep(3)  # pausa extra
+
+    # Verifica se a página carregou procurando por múltiplos indicadores
+    # ao invés de um título específico que pode não existir
+    indicadores = [
+        'table.cdk-table',
+        'button.linkAcaoIcone.iconeBaixar',
+        '[title="Download"]',
+        'div.itemNavegacao:has-text("ASEL")',
+        'div.itemNavegacao:has-text("PDF")'
+    ]
+    encontrado = False
+    for selector in indicadores:
+        try:
+            if page.locator(selector).count() > 0:
+                print(f"Indicador de carregamento encontrado: {selector}")
+                encontrado = True
+                break
+        except:
+            continue
+    if not encontrado:
+        # Último recurso: espera 5 segundos adicionais e assume que carregou
+        print("Nenhum indicador específico encontrado, aguardando mais 5 segundos...")
+        time.sleep(5)
+
+    # Adicional: verifica se há algum erro na tela
+    try:
+        if page.locator('text=Erro').count() > 0:
+            raise Exception("Página de erro detectada.")
+    except:
+        pass
 
 # -----------------------------------------------------------------------------
 # FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO
@@ -129,45 +161,33 @@ def baixar_arquivo_por_interceptacao(page, descricao):
     2. Se falhar, extrai o ticket do HTML e constrói a URL.
     3. Se falhar, tenta forçar o clique via JavaScript.
     """
-    # Padrão da URL de download
     url_pattern = "https://www.rtm.selic.gov.br/extrato-selic-spring/rest/extrato-custo-selic-pdf/pdf/download?ticket="
 
     # ---- ESTRATÉGIA 1: Clique + captura de resposta ----
     try:
-        # Configura o listener para capturar a resposta da requisição de download
         with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=15000) as response_info:
-            # Tenta clicar no botão de download usando o seletor mais específico
             seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
             if page.locator(seletor).count() > 0:
                 page.locator(seletor).first.click(force=True, timeout=5000)
             else:
-                # Fallback: tenta qualquer elemento com título Download
                 page.locator('[title="Download"]').first.click(force=True, timeout=5000)
         response = response_info.value
         download_url = response.url
         print(f"Requisição de download capturada: {download_url}")
-
-        # Agora baixa o arquivo a partir da URL
         return baixar_por_url(page, download_url, descricao)
     except Exception as e:
         print(f"Estratégia 1 (clique + captura) falhou: {e}")
 
     # ---- ESTRATÉGIA 2: Extrair ticket do HTML ----
     try:
-        # Procura por um script ou elemento que contenha o ticket
-        # Às vezes o ticket está em um atributo 'data-ticket' ou em um input hidden
         ticket = page.evaluate('''
             () => {
-                // Procura em elementos com data-ticket
                 const el = document.querySelector('[data-ticket]');
                 if (el) return el.dataset.ticket;
-                // Procura em inputs hidden com name='ticket'
                 const input = document.querySelector('input[name="ticket"]');
                 if (input) return input.value;
-                // Procura em localStorage
                 const ls = localStorage.getItem('ticket');
                 if (ls) return ls;
-                // Tenta extrair da URL de algum link
                 const links = document.querySelectorAll('a[href*="ticket="]');
                 for (let a of links) {
                     const match = a.href.match(/ticket=([^&]+)/);
@@ -189,7 +209,6 @@ def baixar_arquivo_por_interceptacao(page, descricao):
         if page.locator(seletor).count() == 0:
             seletor = '[title="Download"]'
         elemento = page.locator(seletor).first
-        # Disparar eventos manualmente
         page.evaluate('''
             (el) => {
                 const events = ['mousedown', 'mouseup', 'click'];
@@ -199,11 +218,8 @@ def baixar_arquivo_por_interceptacao(page, descricao):
                 });
             }
         ''', elemento)
-        # Aguarda um pouco para a requisição ser feita
         time.sleep(3)
-        # Tenta capturar a resposta com um listener mais longo
         with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=10000) as response_info:
-            # Se o clique já foi feito, a resposta pode já ter chegado, mas esperamos
             pass
         response = response_info.value
         download_url = response.url
@@ -212,15 +228,10 @@ def baixar_arquivo_por_interceptacao(page, descricao):
     except Exception as e:
         print(f"Estratégia 3 (eventos manuais) falhou: {e}")
 
-    # Se todas falharem, erro
     raise Exception("Não foi possível obter a URL de download.")
 
 def baixar_por_url(page, url, descricao):
-    """
-    Baixa o arquivo a partir de uma URL, criando um link no DOM e clicando nele.
-    """
     try:
-        # Cria um elemento <a> com a URL e clica
         page.evaluate(f'''
             const a = document.createElement('a');
             a.href = '{url}';
@@ -229,7 +240,6 @@ def baixar_por_url(page, url, descricao):
             a.click();
             a.remove();
         ''')
-        # Aguarda o download
         with page.expect_download(timeout=30000) as download_info:
             pass
         download = download_info.value
@@ -255,7 +265,6 @@ def acessar_asel_e_baixar(page, descricao):
     asel.click()
     page.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-    # Na página ASEL, o download pode ter uma URL ligeiramente diferente, mas o padrão é o mesmo
     baixar_arquivo_por_interceptacao(page, descricao + "_ASEL")
 
 # -----------------------------------------------------------------------------
