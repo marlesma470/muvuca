@@ -1,30 +1,52 @@
 import json
 import time
 import subprocess
+import os
 import win32gui
 import win32process
 import psutil
 from pynput import mouse, keyboard
 
-# ================= CONFIGURAÇÕES =================
-EXE_PATH = r"C:\Program Files\XCloud\XCloud.exe"
-PROCESS_NAME = "XCloud.exe"  # nome do processo (pode ser sem .exe)
-STOP_KEY = keyboard.Key.esc  # tecla para interromper a gravação manualmente
-
-# ================= ESTADO GLOBAL =================
-recording = False
-actions = []
-start_time = None
-hwnd = None
-program_running = True
+# ================= FUNÇÕES AUXILIARES =================
+def obter_configuracoes():
+    """Solicita ao usuário as configurações do sistema a ser automatizado."""
+    print("\n" + "="*60)
+    print("🎬 GRAVADOR DE MACROS UNIVERSAL")
+    print("="*60)
+    
+    # 1. Caminho do executável
+    while True:
+        exe_path = input("📁 Caminho completo do executável (ex: C:\\Programas\\MeuSistema.exe): ").strip()
+        if exe_path and os.path.exists(exe_path):
+            break
+        print("❌ Arquivo não encontrado. Tente novamente.")
+    
+    # 2. Nome do processo (opcional)
+    default_process = os.path.basename(exe_path)
+    process_name = input(f"🔄 Nome do processo (padrão: {default_process}): ").strip()
+    if not process_name:
+        process_name = default_process
+    
+    # 3. Título da janela (opcional)
+    window_title = input("🪟 Título da janela (opcional, deixe em branco para ignorar): ").strip()
+    
+    print("\n✅ Configurações salvas:")
+    print(f"   Executável: {exe_path}")
+    print(f"   Processo: {process_name}")
+    if window_title:
+        print(f"   Título (fallback): {window_title}")
+    else:
+        print("   Título (fallback): não definido")
+    print("\n" + "="*60)
+    
+    return exe_path, process_name, window_title
 
 # ================= FUNÇÕES DE JANELA =================
 def find_window_by_process(process_name):
-    """Retorna o handle da janela principal do processo (primeira janela visível)."""
+    """Encontra a janela pelo nome do processo."""
     for proc in psutil.process_iter(['pid', 'name']):
         if proc.info['name'].lower() == process_name.lower():
             pid = proc.info['pid']
-            # Lista todas as janelas e verifica qual pertence a esse PID
             def callback(hwnd, hwnds):
                 if win32gui.IsWindowVisible(hwnd):
                     _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
@@ -34,8 +56,20 @@ def find_window_by_process(process_name):
             hwnds = []
             win32gui.EnumWindows(callback, hwnds)
             if hwnds:
-                return hwnds[0]  # primeira janela encontrada
+                return hwnds[0]
     return None
+
+def find_window_by_title(title):
+    """Encontra a janela pelo título (parcial)."""
+    def callback(hwnd, hwnds):
+        if win32gui.IsWindowVisible(hwnd):
+            window_text = win32gui.GetWindowText(hwnd)
+            if title.lower() in window_text.lower():
+                hwnds.append(hwnd)
+        return True
+    hwnds = []
+    win32gui.EnumWindows(callback, hwnds)
+    return hwnds[0] if hwnds else None
 
 def get_window_rect(hwnd):
     return win32gui.GetWindowRect(hwnd)
@@ -47,65 +81,113 @@ def is_point_inside_window(x, y, hwnd):
     return left <= x <= right and top <= y <= bottom
 
 def is_process_running(process_name):
-    """Verifica se o processo ainda está em execução."""
     for proc in psutil.process_iter(['name']):
         if proc.info['name'].lower() == process_name.lower():
             return True
     return False
 
-# ================= CALLBACKS =================
-def on_click(x, y, button, pressed):
-    global recording, actions, start_time, hwnd
-    if not recording:
+# ================= GRAVADOR =================
+def main():
+    # Obtém configurações do usuário
+    exe_path, process_name, window_title = obter_configuracoes()
+    
+    # Variáveis globais
+    global recording, actions, start_time, hwnd, program_running
+    recording = False
+    actions = []
+    start_time = None
+    hwnd = None
+    program_running = True
+    STOP_KEY = keyboard.Key.esc
+    
+    # Abre o aplicativo
+    try:
+        print(f"🚀 Abrindo {exe_path}...")
+        subprocess.Popen([exe_path])
+        inicio = time.time()
+        while True:
+            # Tenta encontrar pelo processo
+            hwnd = find_window_by_process(process_name)
+            if hwnd:
+                break
+            # Se tiver título definido, tenta por ele
+            if window_title:
+                hwnd = find_window_by_title(window_title)
+                if hwnd:
+                    break
+            if time.time() - inicio > 30:
+                print("❌ Tempo limite: aplicativo não abriu.")
+                return
+            time.sleep(0.5)
+        print(f"✅ Janela encontrada.")
+    except Exception as e:
+        print(f"❌ Erro: {e}")
         return
-    if not pressed:
-        return
-    if hwnd is None:
-        return
-    if is_point_inside_window(x, y, hwnd):
-        left, top, _, _ = get_window_rect(hwnd)
-        rel_x = x - left
-        rel_y = y - top
-        action = {
-            'type': 'click',
-            'button': button.name,
-            'x': rel_x,
-            'y': rel_y,
-            'timestamp': time.time() - start_time
-        }
-        actions.append(action)
-        print(f"✅ Clique {button.name} em ({rel_x}, {rel_y})")
-    else:
-        print(f"⏭️ Clique fora da janela ignorado.")
-
-def on_press(key):
-    global recording, program_running
-    # Se pressionar ESC, interrompe a gravação e finaliza
-    if key == STOP_KEY:
-        print("👋 Interrompendo pelo usuário...")
-        program_running = False
-        return False  # para o listener
-    # Grava teclas apenas se estiver gravando e a janela estiver em foco
-    if recording:
-        # verifica se a janela está em primeiro plano
-        fg_hwnd = win32gui.GetForegroundWindow()
-        if hwnd is not None and fg_hwnd == hwnd:
-            try:
-                key_name = key.char
-            except AttributeError:
-                key_name = str(key).replace('Key.', '')
+    
+    # Inicia gravação
+    recording = True
+    start_time = time.time()
+    print("▶️ GRAVAÇÃO INICIADA automaticamente!")
+    print(f"Pressione {STOP_KEY} para interromper e salvar.")
+    
+    # ===== CALLBACKS =====
+    def on_click(x, y, button, pressed):
+        global recording, actions, start_time, hwnd
+        if not recording or not pressed or hwnd is None:
+            return
+        if is_point_inside_window(x, y, hwnd):
+            left, top, _, _ = get_window_rect(hwnd)
+            rel_x = x - left
+            rel_y = y - top
             action = {
-                'type': 'key',
-                'key': key_name,
+                'type': 'click',
+                'button': button.name,
+                'x': rel_x,
+                'y': rel_y,
                 'timestamp': time.time() - start_time
             }
             actions.append(action)
-            print(f"⌨️ Tecla '{key_name}' registrada")
+            print(f"✅ Clique {button.name} em ({rel_x}, {rel_y})")
         else:
-            print(f"⏭️ Tecla ignorada (janela não está em foco)")
-
-# ================= SALVAR MACRO =================
-def save_macro():
+            print(f"⏭️ Clique fora da janela ignorado.")
+    
+    def on_press(key):
+        global recording, program_running
+        if key == STOP_KEY:
+            print("👋 Interrompendo...")
+            program_running = False
+            return False
+        if recording:
+            fg_hwnd = win32gui.GetForegroundWindow()
+            if hwnd is not None and fg_hwnd == hwnd:
+                try:
+                    key_name = key.char
+                except AttributeError:
+                    key_name = str(key).replace('Key.', '')
+                action = {
+                    'type': 'key',
+                    'key': key_name,
+                    'timestamp': time.time() - start_time
+                }
+                actions.append(action)
+                print(f"⌨️ Tecla '{key_name}' registrada")
+            else:
+                print(f"⏭️ Tecla ignorada (janela não em foco)")
+    
+    # Inicia listeners
+    with mouse.Listener(on_click=on_click) as mouse_listener, \
+         keyboard.Listener(on_press=on_press) as keyboard_listener:
+        while program_running and recording:
+            if not is_process_running(process_name):
+                print("⚠️ Aplicativo fechado. Encerrando...")
+                recording = False
+                break
+            time.sleep(0.5)
+        mouse_listener.stop()
+        keyboard_listener.stop()
+    
+    # Salva macro
+    print("⏹️ GRAVAÇÃO FINALIZADA.")
     if actions:
         filename = f"macro_{int(time.time())}.json"
         with open(filename, 'w') as f:
@@ -113,68 +195,6 @@ def save_macro():
         print(f"💾 Macro salva em {filename} com {len(actions)} ações.")
     else:
         print("Nenhuma ação gravada.")
-
-# ================= ABRIR APLICATIVO =================
-def open_app():
-    global hwnd
-    try:
-        print(f"🚀 Abrindo {EXE_PATH}...")
-        subprocess.Popen([EXE_PATH])
-        # Aguarda o processo aparecer e a janela ser detectada
-        inicio = time.time()
-        while True:
-            hwnd = find_window_by_process(PROCESS_NAME)
-            if hwnd:
-                break
-            if time.time() - inicio > 30:  # timeout de 30s
-                print("❌ Tempo limite: aplicativo não abriu.")
-                return False
-            time.sleep(0.5)
-        print(f"✅ Janela do {PROCESS_NAME} encontrada.")
-        return True
-    except Exception as e:
-        print(f"❌ Erro ao abrir: {e}")
-        return False
-
-# ================= MAIN =================
-def main():
-    global recording, start_time, hwnd, program_running
-
-    print("="*60)
-    print("🎬 GRAVADOR AUTOMÁTICO - XCloud")
-    print("="*60)
-    print("A gravação começará automaticamente quando o aplicativo abrir.")
-    print(f"Pressione {STOP_KEY} para interromper e salvar.")
-    print("="*60)
-
-    # Abre o aplicativo
-    if not open_app():
-        return
-
-    # Inicia a gravação automaticamente
-    recording = True
-    start_time = time.time()
-    print("▶️ GRAVAÇÃO INICIADA automaticamente!")
-
-    # Inicia os listeners
-    with mouse.Listener(on_click=on_click) as mouse_listener, \
-         keyboard.Listener(on_press=on_press) as keyboard_listener:
-        # Fica em loop enquanto o processo estiver rodando e a gravação estiver ativa
-        while program_running and recording:
-            # Verifica se o processo ainda está em execução
-            if not is_process_running(PROCESS_NAME):
-                print("⚠️ O aplicativo foi fechado. Encerrando gravação...")
-                recording = False
-                break
-            time.sleep(0.5)  # verifica a cada 500ms
-        # Para os listeners
-        mouse_listener.stop()
-        keyboard_listener.stop()
-
-    # Salva a macro ao sair
-    print("⏹️ GRAVAÇÃO FINALIZADA.")
-    save_macro()
-    print("Programa encerrado.")
 
 if __name__ == "__main__":
     main()
