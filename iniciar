@@ -1,88 +1,56 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY
-# Script completo para automatizar o acesso ao portal SELIC, extração do
-# código de e-mail, download dos arquivos Custo Selic e ASEL, repetindo para
-# múltiplas credenciais.
-# 
-# ALTERAÇÕES:
-# - Após o login, aguarda 40 segundos fixos antes de verificar o e-mail.
-# - Sempre pega o último e-mail recebido com o assunto "Código Temporário SELIC".
-# - Todos os arquivos são salvos na pasta "Downloads" do usuário.
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM TRATAMENTO SSO
 # =============================================================================
 
 import os
 import re
 import time
 import traceback
-from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import win32com.client
 
 # -----------------------------------------------------------------------------
-# CONFIGURAÇÕES GERAIS
+# CONFIGURAÇÕES
 # -----------------------------------------------------------------------------
 
-# PASTA DE DOWNLOAD DEFINITIVA: Sempre a pasta "Downloads" do usuário
 DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Tempo de espera inicial após o login (segundos) antes de verificar o e-mail
-TEMPO_ESPERA_INICIAL = 40
-
-# Tempo máximo de busca pelo e-mail (segundos) após a espera inicial
-TEMPO_MAXIMO_BUSCA = 60
-
-# Intervalo entre verificações de e-mail
-INTERVALO_VERIFICACAO = 5
+TEMPO_ESPERA_INICIAL = 15   # Aguarda 15s após login antes de buscar o e-mail
+TEMPO_MAXIMO_BUSCA = 60     # Tempo máximo para encontrar o e-mail
+INTERVALO_VERIFICACAO = 5   # Intervalo entre verificações
 
 # -----------------------------------------------------------------------------
-# FUNÇÕES DE LEITURA DE CREDENCIAIS
+# LEITURA DE CREDENCIAIS
 # -----------------------------------------------------------------------------
 
 def ler_credencial_selic(descricao):
-    """
-    Lê o arquivo de credenciais e retorna o login e senha para a descrição fornecida.
-    Exemplo de linha no arquivo:
-        Selic SUL|2|Login|MARLON|Senha|Sicredi2026@
-    """
-    arquivo = os.path.join(
-        os.environ["APPDATA"],
-        "AutomacaoCustodia",
-        "credenciais_sistemas.txt"
-    )
+    arquivo = os.path.join(os.environ["APPDATA"], "AutomacaoCustodia", "credenciais_sistemas.txt")
     if not os.path.exists(arquivo):
-        raise Exception(f"Arquivo de credenciais não encontrado: {arquivo}")
+        raise Exception(f"Arquivo não encontrado: {arquivo}")
 
     with open(arquivo, "r", encoding="utf-8", errors="ignore") as f:
         for linha in f:
             linha = linha.strip()
             if linha.startswith(descricao + "|"):
                 partes = linha.split("|")
-                # Espera-se: descricao, 2, Login, login, Senha, senha
                 if len(partes) >= 6:
                     login = partes[3].strip()
                     senha = partes[5].strip()
                     return login, senha
-
-    raise Exception(f"Credencial para '{descricao}' não encontrada no arquivo.")
+    raise Exception(f"Credencial '{descricao}' não encontrada.")
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO PARA EXTRAIR O CÓDIGO DO E-MAIL (OUTLOOK)
+# OBTENÇÃO DO CÓDIGO DO E-MAIL (SEMPRE O MAIS RECENTE)
 # -----------------------------------------------------------------------------
 
 def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_VERIFICACAO):
-    """
-    Procura na Caixa de Entrada o e-mail mais recente com assunto
-    "Código Temporário SELIC" e extrai o código de 6 dígitos do corpo HTML.
-    Retorna o código como string ou None se não encontrado.
-    """
-    outlook = None
     try:
         outlook = win32com.client.Dispatch("Outlook.Application")
         namespace = outlook.GetNamespace("MAPI")
-        inbox = namespace.GetDefaultFolder(6)  # olFolderInbox
+        inbox = namespace.GetDefaultFolder(6)
     except Exception as e:
-        print(f"Erro ao acessar o Outlook: {e}")
+        print(f"Erro no Outlook: {e}")
         return None
 
     inicio = time.time()
@@ -94,123 +62,102 @@ def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_V
                 try:
                     assunto = str(mail.Subject).strip()
                     if "Código Temporário SELIC" in assunto:
-                        # Obtém o corpo HTML
-                        corpo = mail.HTMLBody if hasattr(mail, 'HTMLBody') and mail.HTMLBody else mail.Body
-                        # Busca um número de 6 dígitos dentro de uma tag <p> com estilo
+                        corpo = mail.HTMLBody if mail.HTMLBody else mail.Body
                         padrao = re.compile(r'<p[^>]*>(\d{6})</p>', re.IGNORECASE)
                         match = padrao.search(corpo)
                         if match:
                             codigo = match.group(1)
-                            # Marca como lido para não reutilizar
                             mail.UnRead = False
                             mail.Save()
                             return codigo
-                except Exception:
+                except:
                     continue
-        except Exception:
+        except:
             pass
         time.sleep(intervalo)
-
     return None
 
 # -----------------------------------------------------------------------------
-# FUNÇÕES DE AUTOMAÇÃO COM PLAYWRIGHT
+# FUNÇÕES DO PLAYWRIGHT
 # -----------------------------------------------------------------------------
 
 def fazer_login(page, iselic, login, senha):
-    """
-    Preenche os campos de login e submete o formulário.
-    Retorna após a submissão (aguarda a página de OTP).
-    """
-    url_login = (
-        "https://www.rtm.selic.gov.br/auth/realms/logon/protocol/openid-connect/auth"
-        "?response_type=code&client_id=portal-selic-mercado-spring-sso&scope=openid"
-        "&state=jTb856Ff74qjqGWPeJL797yHLK-f8sBf9hKkIzp0QVA%3D"
-        "&redirect_uri=https://www.rtm.selic.gov.br/portal-selic/login/oauth2/code/sso"
-        "&nonce=3cwEHiw5JQUISKiBjTPYRHJ4ow5eUC7YjLmQsOF4wAM"
-    )
-    page.goto(url_login, wait_until="networkidle", timeout=60000)
+    # Vai para a página inicial do portal
+    page.goto("https://www.rtm.selic.gov.br/portal-selic/", wait_until="networkidle", timeout=60000)
+
+    # Clica no botão "Entrar" (pode ter texto diferente, tenta vários)
+    try:
+        page.click('a:has-text("Entrar")')
+    except:
+        try:
+            page.click('button:has-text("Entrar")')
+        except:
+            page.click('a[href*="login"]')
+
+    # Aguarda o formulário de login carregar
+    page.wait_for_selector('#iselic', timeout=30000)
 
     # Preenche os campos
     page.fill('#iselic', iselic)
     page.fill('#userselic', login)
     page.fill('#password', senha)
 
-    # Clica no botão Entrar
+    # Clica no botão de login
     page.click('#kc-login')
 
-    # Aguarda o campo OTP aparecer (indica que o login foi processado)
+    # Aguarda o campo OTP aparecer (indica que o login foi submetido)
     page.wait_for_selector('#otp', timeout=30000)
 
 def preencher_otp_e_concluir(page, codigo):
-    """
-    Preenche o campo OTP com o código e clica em Entrar.
-    Aguarda a página principal carregar (presença do link "Extrato").
-    """
+    # Preenche e envia o OTP
     page.fill('#otp', codigo)
     page.click('#kc-login')
 
-    # Aguarda a página principal (link Extrato)
-    page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
+    # Aguarda um pouco para a página carregar
+    page.wait_for_timeout(5000)
+
+    # Verifica se a página intermediária com link SSO apareceu
+    if page.locator('a[href="/portal-selic/oauth2/authorization/sso"]').count() > 0:
+        print("Página intermediária SSO detectada. Clicando no link...")
+        page.click('a[href="/portal-selic/oauth2/authorization/sso"]')
+        # Aguarda a página principal carregar
+        page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
+    else:
+        # Já está na página principal? Aguarda o link Extrato
+        page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
 
 def navegar_ate_custo_selic(page):
-    """
-    Clica em "Extrato" e depois em "Custo Selic".
-    Aguarda a página de Custo Selic carregar.
-    """
     # Clica em Extrato
     page.click('a:has-text("Extrato")')
     # Aguarda o link Custo Selic
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     # Clica em Custo Selic
     page.click('a[href*="custo-selic"]')
-    # Aguarda o botão de download (indica que a página carregou)
+    # Aguarda o botão de download
     page.wait_for_selector('button[title="Download"]', timeout=30000)
 
-def baixar_arquivo(page, timeout=60000):
-    """
-    Clica no botão de download (identificado pelo título 'Download') e
-    salva o arquivo na pasta DOWNLOAD_DIR com o nome original.
-    Retorna o caminho completo do arquivo baixado.
-    """
-    with page.expect_download(timeout=timeout) as download_info:
-        # Clica no botão de download (primeiro encontrado)
+def baixar_arquivo(page):
+    with page.expect_download(timeout=60000) as download_info:
         page.locator('button[title="Download"]').first.click()
-
     download = download_info.value
-    nome_original = download.suggested_filename
-    destino = os.path.join(DOWNLOAD_DIR, nome_original)
-
-    # Remove se já existir (para sobrescrever)
+    destino = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
     if os.path.exists(destino):
-        try:
-            os.remove(destino)
-        except Exception:
-            pass
-
+        os.remove(destino)
     download.save_as(destino)
-    print(f"Arquivo baixado em: {destino}")
+    print(f"Baixado: {destino}")
     return destino
 
 def acessar_asel_e_baixar(page):
-    """
-    Clica no elemento 'ASEL' e depois no botão de download.
-    """
-    # Localiza o elemento ASEL (div com classe e texto)
-    asel = page.locator('div.itemNavegacao:has-text("ASEL")')
-    asel.wait_for(timeout=30000)
-    asel.click()
-    # Aguarda a nova página carregar (botão de download)
+    page.locator('div.itemNavegacao:has-text("ASEL")').wait_for(timeout=30000)
+    page.locator('div.itemNavegacao:has-text("ASEL")').click()
     page.wait_for_selector('button[title="Download"]', timeout=30000)
-    # Baixa o arquivo (segundo download)
     baixar_arquivo(page)
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO PRINCIPAL
+# MAIN
 # -----------------------------------------------------------------------------
 
 def main():
-    # Lista de credenciais: (descrição no arquivo, código iSelic)
     credenciais = [
         ("Selic Banco", "01181521"),
         ("Selic SUL", "87437687"),
@@ -220,87 +167,60 @@ def main():
         ("Selic PR", "80230774"),
     ]
 
-    print(f"Todos os arquivos serão salvos em: {DOWNLOAD_DIR}")
-    print(f"Aguardando {TEMPO_ESPERA_INICIAL} segundos após cada login para verificar o e-mail.\n")
+    print(f"Downloads em: {DOWNLOAD_DIR}")
+    print(f"Aguardando {TEMPO_ESPERA_INICIAL}s após login para buscar o e-mail.\n")
 
-    # Inicia o Playwright
     with sync_playwright() as p:
         for descricao, iselic in credenciais:
-            print(f"\n=== Processando {descricao} (iSelic: {iselic}) ===")
-
+            print(f"\n=== {descricao} (iSelic: {iselic}) ===")
             try:
-                # Lê as credenciais do arquivo
                 login, senha = ler_credencial_selic(descricao)
-                print(f"Login: {login}, Senha: [oculta]")
+                print(f"Login: {login}")
             except Exception as e:
                 print(f"ERRO ao ler credenciais: {e}")
                 continue
 
-            # Lança o navegador (Edge)
             browser = p.chromium.launch(
                 channel="msedge",
-                headless=False,  # Mantém visível para depuração
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--disable-default-apps",
-                    "--disable-search-engine-choice-screen",
-                    "--disable-sync",
-                    "--no-first-run"
-                ]
+                headless=False,  # True se quiser rodar em background
+                args=["--disable-blink-features=AutomationControlled"]
             )
-            context = browser.new_context(
-                accept_downloads=True,
-                ignore_https_errors=True
-            )
+            context = browser.new_context(accept_downloads=True, ignore_https_errors=True)
             page = context.new_page()
 
             try:
-                # 1) Login inicial
                 fazer_login(page, iselic, login, senha)
 
-                # 2) Aguarda 40 segundos fixos para o e-mail chegar
-                print(f"Aguardando {TEMPO_ESPERA_INICIAL} segundos para o envio do código...")
+                print(f"Aguardando {TEMPO_ESPERA_INICIAL}s para o e-mail...")
                 time.sleep(TEMPO_ESPERA_INICIAL)
 
-                # 3) Busca o código no e-mail (pega o mais recente)
-                print("Procurando o código no e-mail...")
+                print("Buscando o código no e-mail...")
                 codigo = obter_codigo_do_email()
                 if not codigo:
-                    raise Exception("Código não encontrado no e-mail dentro do tempo limite.")
+                    raise Exception("Código não encontrado.")
                 print(f"Código obtido: {codigo}")
 
-                # 4) Preenche OTP e conclui login
                 preencher_otp_e_concluir(page, codigo)
 
-                # 5) Navega até Custo Selic
+                # Agora já estamos na página principal
                 navegar_ate_custo_selic(page)
-
-                # 6) Primeiro download (Custo Selic)
-                print("Baixando arquivo do Custo Selic...")
+                print("Baixando Custo Selic...")
                 baixar_arquivo(page)
 
-                # 7) Acessa ASEL e baixa o segundo arquivo
-                print("Acessando ASEL e baixando arquivo...")
+                print("Acessando ASEL...")
                 acessar_asel_e_baixar(page)
 
-                print(f"Processo concluído para {descricao}.")
+                print(f"Finalizado {descricao}.")
 
             except Exception as e:
-                print(f"ERRO durante a automação para {descricao}:")
+                print(f"ERRO: {e}")
                 traceback.print_exc()
             finally:
-                # Fecha o navegador (como pedido: "Feche o site e entre novamente")
                 context.close()
                 browser.close()
-                # Pequena pausa entre as credenciais
                 time.sleep(5)
 
-        print("\nProcesso concluído para todas as credenciais.")
-
-# -----------------------------------------------------------------------------
-# PONTO DE ENTRADA
-# -----------------------------------------------------------------------------
+        print("\nTodos os processos concluídos.")
 
 if __name__ == "__main__":
     main()
