@@ -1,407 +1,256 @@
-"""
-Serviço de credenciais com criptografia DPAPI.
-Sistemas fixos lidos do arquivo JSON compartilhado (sistemas_credenciais.json).
-Credenciais (valores) permanecem na pasta local do usuário (%APPDATA%).
-"""
+# =============================================================================
+# PARTE 1 - IMPORTAÇÕES, CONFIGURAÇÕES E FUNÇÕES AUXILIARES
+# =============================================================================
 
 import os
-import base64
-import ctypes
+import re
 import time
-import atexit
-import json
-from ctypes import wintypes
-from typing import List, Dict, Tuple, Optional
-import threading
+from datetime import datetime, timedelta
+from playwright.sync_api import sync_playwright
+import win32com.client
 
-# ============================================================
-# CONSTANTES (LOCAIS POR USUÁRIO)
-# ============================================================
+# -----------------------------------------------------------------------------
+# LEITURA DAS CREDENCIAIS DO ARQUIVO
+# -----------------------------------------------------------------------------
 
-APP_DATA_LOCAL = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'AutomacaoCustodia')
-os.makedirs(APP_DATA_LOCAL, exist_ok=True)
+def ler_credencial_selic(descricao):
+    """
+    Lê o arquivo de credenciais e retorna o login e senha para a descrição fornecida.
+    Exemplo de linha no arquivo:
+        Selic SUL|2|Login|MARLON|Senha|Sicredi2026@
+    """
+    arquivo = os.path.join(
+        os.environ["APPDATA"],
+        "AutomacaoCustodia",
+        "credenciais_sistemas.txt"
+    )
+    if not os.path.exists(arquivo):
+        raise Exception(f"Arquivo não encontrado: {arquivo}")
 
-CREDENTIALS_DAT = os.path.join(APP_DATA_LOCAL, 'credenciais_sistemas.dat')
-CREDENTIALS_TXT = os.path.join(APP_DATA_LOCAL, 'credenciais_sistemas.txt')
+    with open(arquivo, "r", encoding="utf-8", errors="ignore") as f:
+        for linha in f:
+            linha = linha.strip()
+            if linha.startswith(descricao + "|"):
+                partes = linha.split("|")
+                # Espera-se: descricao, 2, Login, login, Senha, senha
+                if len(partes) >= 6:
+                    login = partes[3].strip()
+                    senha = partes[5].strip()
+                    return login, senha
 
-# ============================================================
-# SISTEMAS FIXOS (lidos do arquivo JSON compartilhado)
-# ============================================================
+    raise Exception(f"Credencial para '{descricao}' não encontrada.")
 
-def _carregar_sistemas_do_json() -> Dict[str, List[str]]:
-    """Carrega a lista de sistemas e seus campos do arquivo JSON."""
-    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sistemas_credenciais.json')
-    try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            dados = json.load(f)
-            return dados.get("sistemas", {})
-    except:
-        # Fallback para sistemas padrão
-        return {
-            "CETIP PRÓPRIA": ["Login", "Senha"],
-            "CETIP TERCEIROS": ["Login", "Senha"],
-            "Galgo Max": ["Login", "Senha"],
-            "CME Group": ["Login", "Senha"],
-            "Nexus": ["Login", "Senha"]
-        }
+# -----------------------------------------------------------------------------
+# FUNÇÃO PARA EXTRAIR O CÓDIGO DO E-MAIL (OUTLOOK)
+# -----------------------------------------------------------------------------
 
-# Variável global que será atualizada sempre que o JSON for recarregado
-SISTEMAS_FIXOS = _carregar_sistemas_do_json()
+def obter_codigo_email(tempo_espera=60, intervalo=3):
+    """
+    Aguarda até 'tempo_espera' segundos por um e-mail com assunto
+    "Código Temporário SELIC" na Caixa de Entrada padrão.
+    Extrai o código de 6 dígitos do corpo HTML.
+    Retorna o código como string ou None se não encontrado.
+    """
+    outlook = win32com.client.Dispatch("Outlook.Application")
+    namespace = outlook.GetNamespace("MAPI")
+    inbox = namespace.GetDefaultFolder(6)  # olFolderInbox
 
-# Lock e cache
-_cred_lock = threading.RLock()
-_cache: Dict[str, Dict[str, any]] = {}
-_cache_timestamp: float = 0
-_CACHE_TTL = 5.0
-_temp_file_created = False
+    inicio = time.time()
+    while time.time() - inicio < tempo_espera:
+        items = inbox.Items
+        items.Sort("[ReceivedTime]", True)
+        for mail in items:
+            try:
+                assunto = str(mail.Subject).strip()
+                if "Código Temporário SELIC" in assunto:
+                    # Pega o corpo HTML (se disponível) ou corpo texto
+                    corpo = mail.HTMLBody if hasattr(mail, 'HTMLBody') and mail.HTMLBody else mail.Body
+                    # Procura por um número de 6 dígitos dentro de uma tag <p> com estilo
+                    padrao = re.compile(r'<p[^>]*>(\d{6})</p>', re.IGNORECASE)
+                    match = padrao.search(corpo)
+                    if match:
+                        codigo = match.group(1)
+                        # Opcional: marcar como lido
+                        mail.UnRead = False
+                        mail.Save()
+                        return codigo
+            except Exception:
+                continue
+        time.sleep(intervalo)
+    return None
 
-# ============================================================
-# DPAPI
-# ============================================================
+# -----------------------------------------------------------------------------
+# CONFIGURAÇÃO DA PASTA DE DOWNLOAD
+# -----------------------------------------------------------------------------
 
-CRYPTPROTECT_UI_FORBIDDEN = 0x01
+DOWNLOAD_DIR = r"\\nas03\adm_custodia\custodia\Planilhas\Indexadores"
+# Caso a rede não esteja disponível, usa a pasta Downloads do usuário
+if not os.path.exists(DOWNLOAD_DIR):
+    DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-class DATA_BLOB(ctypes.Structure):
-    _fields_ = [
-        ('cbData', wintypes.DWORD),
-        ('pbData', ctypes.POINTER(wintypes.BYTE))
+# -----------------------------------------------------------------------------
+# FUNÇÃO PARA BAIXAR ARQUIVO (PLAYWRIGHT)
+# -----------------------------------------------------------------------------
+
+def baixar_arquivo(page, timeout=60000):
+    """
+    Clica no botão de download (identificado pelo título 'Download') e
+    salva o arquivo na pasta DOWNLOAD_DIR com o nome original.
+    """
+    with page.expect_download(timeout=timeout) as download_info:
+        # Clica no botão de download (pode ser o primeiro encontrado)
+        page.locator('button[title="Download"]').first.click()
+
+    download = download_info.value
+    nome_original = download.suggested_filename
+    destino = os.path.join(DOWNLOAD_DIR, nome_original)
+
+    # Remove se já existir (opcional)
+    if os.path.exists(destino):
+        os.remove(destino)
+
+    download.save_as(destino)
+    print(f"Arquivo baixado: {destino}")
+    return destino
+
+# =============================================================================
+# PARTE 2 - AUTOMAÇÃO DO LOGIN E NAVEGAÇÃO
+# =============================================================================
+
+def fazer_login(page, iselic, login, senha):
+    """
+    Preenche os campos de login e submete o formulário.
+    Retorna após a submissão (aguarda a próxima página).
+    """
+    # URL fixa fornecida
+    url_login = (
+        "https://www.rtm.selic.gov.br/auth/realms/logon/protocol/openid-connect/auth"
+        "?response_type=code&client_id=portal-selic-mercado-spring-sso&scope=openid"
+        "&state=jTb856Ff74qjqGWPeJL797yHLK-f8sBf9hKkIzp0QVA%3D"
+        "&redirect_uri=https://www.rtm.selic.gov.br/portal-selic/login/oauth2/code/sso"
+        "&nonce=3cwEHiw5JQUISKiBjTPYRHJ4ow5eUC7YjLmQsOF4wAM"
+    )
+    page.goto(url_login, wait_until="networkidle", timeout=60000)
+
+    # Preenche iSelic
+    page.fill('#iselic', iselic)
+    # Preenche login
+    page.fill('#userselic', login)
+    # Preenche senha
+    page.fill('#password', senha)
+    # Clica em Entrar
+    page.click('#kc-login')
+
+    # Aguarda a página de OTP (ou a próxima)
+    page.wait_for_selector('#otp', timeout=30000)
+
+def preencher_otp(page, codigo):
+    """
+    Preenche o campo OTP com o código e clica em Entrar.
+    """
+    page.fill('#otp', codigo)
+    page.click('#kc-login')
+    # Aguarda o carregamento da página principal (ex: presença de "Extrato")
+    page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
+
+def navegar_ate_custo_selic(page):
+    """
+    Clica em Extrato e depois em Custo Selic.
+    """
+    page.click('a:has-text("Extrato")')
+    page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
+    page.click('a[href*="custo-selic"]')
+    # Aguarda o carregamento da página do Custo Selic
+    page.wait_for_selector('button[title="Download"]', timeout=30000)
+
+def acessar_asel_e_baixar(page):
+    """
+    Clica no item 'ASEL' e depois no botão de download.
+    """
+    # Localiza o elemento ASEL (div com classe e texto)
+    asel = page.locator('div.itemNavegacao:has-text("ASEL")')
+    asel.wait_for(timeout=30000)
+    asel.click()
+    # Aguarda a nova página carregar
+    page.wait_for_selector('button[title="Download"]', timeout=30000)
+    # Baixa o arquivo (segundo download)
+    baixar_arquivo(page)
+
+# =============================================================================
+# PARTE 3 - EXECUÇÃO PRINCIPAL (LOOP POR CREDENCIAIS)
+# =============================================================================
+
+def main():
+    # Lista de credenciais: (descricao, codigo_iselic)
+    credenciais = [
+        ("Selic Banco", "01181521"),
+        ("Selic SUL", "87437687"),
+        ("Selic NE", "70119680"),
+        ("Selic CN", "33667205"),
+        ("Selic BRC", "33737818"),
+        ("Selic PR", "80230774"),
     ]
 
-def _blob_from_bytes(data: bytes) -> DATA_BLOB:
-    blob = DATA_BLOB()
-    blob.cbData = len(data)
-    blob.pbData = ctypes.cast(
-        ctypes.create_string_buffer(data, len(data)),
-        ctypes.POINTER(wintypes.BYTE)
-    )
-    return blob
+    # Inicia o Playwright
+    with sync_playwright() as p:
+        for descricao, iselic in credenciais:
+            print(f"\n=== Processando {descricao} (iSelic: {iselic}) ===")
 
-def _bytes_from_blob(blob: DATA_BLOB) -> bytes:
-    if blob.cbData == 0 or not blob.pbData:
-        return b''
-    return ctypes.string_at(blob.pbData, blob.cbData)
+            # Lê as credenciais do arquivo
+            login, senha = ler_credencial_selic(descricao)
 
-def _crypt_protect_data(data: bytes) -> bytes:
-    if not data:
-        return b''
-    blob_in = _blob_from_bytes(data)
-    blob_out = DATA_BLOB()
-    crypt32 = ctypes.windll.crypt32
-    result = crypt32.CryptProtectData(
-        ctypes.byref(blob_in),
-        None,
-        None,
-        None,
-        None,
-        CRYPTPROTECT_UI_FORBIDDEN,
-        ctypes.byref(blob_out)
-    )
-    if not result:
-        error_code = ctypes.windll.kernel32.GetLastError()
-        raise Exception(f"Falha ao criptografar (Código: {error_code})")
-    encrypted = _bytes_from_blob(blob_out)
-    kernel32 = ctypes.windll.kernel32
-    if blob_out.pbData:
-        kernel32.LocalFree(blob_out.pbData)
-    return encrypted
+            # Lança o navegador (Edge)
+            browser = p.chromium.launch(
+                channel="msedge",
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--disable-default-apps",
+                    "--disable-search-engine-choice-screen",
+                    "--disable-sync",
+                    "--no-first-run"
+                ]
+            )
+            context = browser.new_context(
+                accept_downloads=True,
+                ignore_https_errors=True
+            )
+            page = context.new_page()
 
-def _crypt_unprotect_data(encrypted_data: bytes) -> bytes:
-    if not encrypted_data:
-        return b''
-    blob_in = _blob_from_bytes(encrypted_data)
-    blob_out = DATA_BLOB()
-    crypt32 = ctypes.windll.crypt32
-    result = crypt32.CryptUnprotectData(
-        ctypes.byref(blob_in),
-        None,
-        None,
-        None,
-        None,
-        CRYPTPROTECT_UI_FORBIDDEN,
-        ctypes.byref(blob_out)
-    )
-    if not result:
-        error_code = ctypes.windll.kernel32.GetLastError()
-        raise Exception(f"Falha ao descriptografar (Código: {error_code})")
-    decrypted = _bytes_from_blob(blob_out)
-    kernel32 = ctypes.windll.kernel32
-    if blob_out.pbData:
-        kernel32.LocalFree(blob_out.pbData)
-    return decrypted
+            # 1) Login inicial
+            fazer_login(page, iselic, login, senha)
 
-# ============================================================
-# CHAVE ANTIGA (migração)
-# ============================================================
-_OLD_KEY = b"Sicredi@2024#AutoCustodia!ChaveSecreta1234"[:32]
-_OLD_IV = b"SicrediIV16bytes"[:16]
+            # 2) Aguarda e obtém código do e-mail
+            print("Aguardando e-mail com código temporário...")
+            codigo = obter_codigo_email(tempo_espera=60)
+            if not codigo:
+                raise Exception("Código não encontrado no e-mail.")
+            print(f"Código obtido: {codigo}")
 
-def _decrypt_old(aes_cipher_text: str) -> str:
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.primitives import padding
-        from cryptography.hazmat.backends import default_backend
-        backend = default_backend()
-        cipher_bytes = base64.b64decode(aes_cipher_text)
-        cipher = Cipher(algorithms.AES(_OLD_KEY), modes.CBC(_OLD_IV), backend=backend)
-        decryptor = cipher.decryptor()
-        padded_data = decryptor.update(cipher_bytes) + decryptor.finalize()
-        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
-        plain_bytes = unpadder.update(padded_data) + unpadder.finalize()
-        return plain_bytes.decode('utf-8')
-    except Exception:
-        return ""
+            # 3) Preenche OTP e conclui login
+            preencher_otp(page, codigo)
 
-def _encrypt(plain_text: str) -> str:
-    if not plain_text:
-        return ""
-    try:
-        encrypted_bytes = _crypt_protect_data(plain_text.encode('utf-8'))
-        return base64.b64encode(encrypted_bytes).decode('ascii')
-    except Exception:
-        return ""
+            # 4) Navega até Custo Selic
+            navegar_ate_custo_selic(page)
 
-def _decrypt(cipher_text: str) -> str:
-    if not cipher_text:
-        return ""
-    try:
-        encrypted_bytes = base64.b64decode(cipher_text)
-        decrypted_bytes = _crypt_unprotect_data(encrypted_bytes)
-        if decrypted_bytes:
-            return decrypted_bytes.decode('utf-8')
-    except Exception:
-        pass
-    try:
-        decrypted = _decrypt_old(cipher_text)
-        if decrypted:
-            return decrypted
-    except Exception:
-        pass
-    return ""
+            # 5) Primeiro download (Custo Selic)
+            print("Baixando arquivo do Custo Selic...")
+            baixar_arquivo(page)
 
-# ============================================================
-# CARREGAMENTO E SALVAMENTO (com cache)
-# ============================================================
+            # 6) Acessa ASEL e baixa o segundo arquivo
+            print("Acessando ASEL e baixando arquivo...")
+            acessar_asel_e_baixar(page)
 
-def _carregar_credenciais_do_dat() -> Dict[str, Dict[str, any]]:
-    creds = {}
-    if not os.path.exists(CREDENTIALS_DAT):
-        return creds
-    try:
-        with open(CREDENTIALS_DAT, 'r', encoding='utf-8') as f:
-            encrypted = f.read().strip()
-            if not encrypted:
-                return creds
-            decrypted = _decrypt(encrypted)
-            if not decrypted:
-                return creds
-            lines = decrypted.splitlines()
-            for line in lines:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                partes = line.split('|')
-                if len(partes) < 2:
-                    continue
-                sistema = partes[0].strip()
-                try:
-                    num_campos = int(partes[1])
-                except ValueError:
-                    continue
-                campos = []
-                valores = {}
-                idx = 2
-                for _ in range(num_campos):
-                    if idx + 1 < len(partes):
-                        campo = partes[idx]
-                        valor = partes[idx + 1]
-                        idx += 2
-                        campos.append(campo)
-                        valores[campo] = valor
-                creds[sistema] = {
-                    'campos': campos,
-                    'valores': valores
-                }
-    except Exception:
-        pass
-    return creds
+            # 7) Fecha o navegador (como pedido: "Feche o site e entre novamente")
+            context.close()
+            browser.close()
 
-def _salvar_credenciais_no_dat(creds: Dict[str, Dict[str, any]]):
-    linhas = []
-    for sistema, dados in creds.items():
-        linha = f"{sistema}|{len(dados['campos'])}"
-        for campo in dados['campos']:
-            valor = dados['valores'].get(campo, "")
-            linha += f"|{campo}|{valor}"
-        linhas.append(linha)
-    conteudo_plano = "\n".join(linhas)
-    if not conteudo_plano:
-        conteudo_plano = ""
-    encrypted = _encrypt(conteudo_plano)
-    if encrypted:
-        temp_path = CREDENTIALS_DAT + ".tmp"
-        try:
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                f.write(encrypted)
-            os.replace(temp_path, CREDENTIALS_DAT)
-        except Exception:
-            with open(CREDENTIALS_DAT, 'w', encoding='utf-8') as f:
-                f.write(encrypted)
-        try:
-            if os.path.exists(CREDENTIALS_TXT):
-                os.remove(CREDENTIALS_TXT)
-        except Exception:
-            pass
+            # Pequena pausa entre as credenciais
+            time.sleep(5)
 
-def _obter_credenciais_com_cache(force_reload: bool = False) -> Dict[str, Dict[str, any]]:
-    global _cache, _cache_timestamp, SISTEMAS_FIXOS
-    with _cred_lock:
-        agora = time.time()
-        if force_reload or not _cache or (agora - _cache_timestamp) > _CACHE_TTL:
-            # Recarrega o JSON para obter a lista mais recente de sistemas
-            SISTEMAS_FIXOS = _carregar_sistemas_do_json()
-            _cache = _carregar_credenciais_do_dat()
-            _garantir_sistemas_fixos()
-            _cache_timestamp = agora
-            _criar_arquivo_temp()
-        return _cache
+        print("\nProcesso concluído para todas as credenciais.")
 
-def _garantir_sistemas_fixos():
-    global SISTEMAS_FIXOS, _cache
-    # Recarrega o JSON novamente (garantia)
-    SISTEMAS_FIXOS = _carregar_sistemas_do_json()
-
-    alterado = False
-    for sistema, campos in SISTEMAS_FIXOS.items():
-        if sistema not in _cache:
-            _cache[sistema] = {
-                'campos': campos.copy(),
-                'valores': {campo: "" for campo in campos}
-            }
-            alterado = True
-        else:
-            campos_existentes = _cache[sistema]['campos']
-            if set(campos_existentes) != set(campos):
-                novos_campos = campos.copy()
-                valores_existentes = _cache[sistema]['valores']
-                novos_valores = {}
-                for c in novos_campos:
-                    novos_valores[c] = valores_existentes.get(c, "")
-                _cache[sistema]['campos'] = novos_campos
-                _cache[sistema]['valores'] = novos_valores
-                alterado = True
-    if alterado:
-        _salvar_credenciais_no_dat(_cache)
-
-def _invalidar_cache():
-    global _cache, _cache_timestamp
-    with _cred_lock:
-        _cache = {}
-        _cache_timestamp = 0
-
-# ============================================================
-# ARQUIVO TEMPORÁRIO (texto puro para scripts)
-# ============================================================
-
-def _criar_arquivo_temp():
-    global _temp_file_created
-    try:
-        creds = _cache.copy()
-        if not creds:
-            return
-        linhas = []
-        for sistema, dados in creds.items():
-            linha = f"{sistema}|{len(dados['campos'])}"
-            for campo in dados['campos']:
-                valor = dados['valores'].get(campo, "")
-                linha += f"|{campo}|{valor}"
-            linhas.append(linha)
-        conteudo = "\n".join(linhas)
-        with open(CREDENTIALS_TXT, 'w', encoding='utf-8') as f:
-            f.write(conteudo)
-        _temp_file_created = True
-        atexit.register(_remover_arquivo_temp)
-    except Exception as e:
-        print(f"Erro ao criar arquivo temporário: {e}")
-
-def _remover_arquivo_temp():
-    global _temp_file_created
-    try:
-        if os.path.exists(CREDENTIALS_TXT):
-            os.remove(CREDENTIALS_TXT)
-            _temp_file_created = False
-    except Exception:
-        pass
-
-def remover_credenciais_temp():
-    _remover_arquivo_temp()
-
-# ============================================================
-# FUNÇÕES PÚBLICAS
-# ============================================================
-
-def listar_sistemas() -> List[str]:
-    """Retorna a lista de sistemas fixos (do JSON)."""
-    global SISTEMAS_FIXOS
-    # Força recarregar para garantir que está atualizado
-    SISTEMAS_FIXOS = _carregar_sistemas_do_json()
-    return sorted(SISTEMAS_FIXOS.keys())
-
-def carregar_credenciais(sistema: str) -> Tuple[List[str], Dict[str, str]]:
-    """Carrega as credenciais de um sistema."""
-    global SISTEMAS_FIXOS
-    if sistema not in SISTEMAS_FIXOS:
-        return [], {}
-    creds = _obter_credenciais_com_cache(force_reload=True)  # Força recarga para capturar novas credenciais
-    if sistema in creds:
-        dados = creds[sistema]
-        return dados['campos'], dados['valores']
-    return SISTEMAS_FIXOS[sistema], {campo: "" for campo in SISTEMAS_FIXOS[sistema]}
-
-def salvar_credenciais(sistema: str, campos: List[str], valores: Dict[str, str]):
-    """Salva as credenciais de um sistema (apenas valores)."""
-    global SISTEMAS_FIXOS
-    if sistema not in SISTEMAS_FIXOS:
-        raise ValueError(f"Sistema '{sistema}' não é um sistema fixo.")
-    campos_fixos = SISTEMAS_FIXOS[sistema]
-    valores_filtrados = {c: valores.get(c, "") for c in campos_fixos}
-    with _cred_lock:
-        creds = _obter_credenciais_com_cache(force_reload=True)
-        creds[sistema] = {
-            'campos': campos_fixos,
-            'valores': valores_filtrados
-        }
-        _salvar_credenciais_no_dat(creds)
-        _invalidar_cache()
-        _obter_credenciais_com_cache(force_reload=True)
-
-def excluir_credencial(sistema: str):
-    """Reseta as credenciais para vazio."""
-    global SISTEMAS_FIXOS
-    if sistema not in SISTEMAS_FIXOS:
-        return
-    with _cred_lock:
-        creds = _obter_credenciais_com_cache(force_reload=True)
-        if sistema in creds:
-            creds[sistema]['valores'] = {c: "" for c in SISTEMAS_FIXOS[sistema]}
-            _salvar_credenciais_no_dat(creds)
-            _invalidar_cache()
-            _obter_credenciais_com_cache(force_reload=True)
-
-def credencial_existe(sistema: str) -> bool:
-    """Verifica se há valores preenchidos."""
-    global SISTEMAS_FIXOS
-    if sistema not in SISTEMAS_FIXOS:
-        return False
-    _, valores = carregar_credenciais(sistema)
-    return any(v.strip() for v in valores.values())
-
-def obter_credencial(sistema: str, campo: str) -> Optional[str]:
-    """Obtém o valor de um campo específico."""
-    _, valores = carregar_credenciais(sistema)
-    return valores.get(campo)
-
-def inicializar_sistemas_fixos():
-    """Garante que todos os sistemas fixos existam no cache."""
-    global SISTEMAS_FIXOS
-    SISTEMAS_FIXOS = _carregar_sistemas_do_json()
-    _obter_credenciais_com_cache(force_reload=True)
+if __name__ == "__main__":
+    main()
