@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM EXPECT_DOWNLOAD
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM SAÍDA LIMPA
 # =============================================================================
 
 import os
@@ -21,12 +21,11 @@ TEMPO_ESPERA_INICIAL = 15
 TEMPO_MAXIMO_BUSCA = 60
 INTERVALO_VERIFICACAO = 5
 
-# --- TEMPOS DE DOWNLOAD ---
-TIMEOUT_DOWNLOAD_INICIO = 30000   # 30 segundos para o download começar após clique
-TIMEOUT_DOWNLOAD_COMPLETO = 60000 # 60 segundos para finalizar
+TIMEOUT_CAPTURA_RESPOSTA = 30000
+TIMEOUT_DOWNLOAD_COMPLETO = 60000
 
 # -----------------------------------------------------------------------------
-# LEITURA DE CREDENCIAIS
+# LEITURA DE CREDENCIAIS (sem prints)
 # -----------------------------------------------------------------------------
 
 def ler_credencial_selic(descricao):
@@ -46,7 +45,7 @@ def ler_credencial_selic(descricao):
     raise Exception(f"Credencial '{descricao}' não encontrada.")
 
 # -----------------------------------------------------------------------------
-# OBTENÇÃO DO CÓDIGO DO E-MAIL
+# OBTENÇÃO DO CÓDIGO DO E-MAIL (sem prints)
 # -----------------------------------------------------------------------------
 
 def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_VERIFICACAO):
@@ -55,8 +54,7 @@ def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_V
         namespace = outlook.GetNamespace("MAPI")
         inbox = namespace.GetDefaultFolder(6)
     except Exception as e:
-        print(f"Erro no Outlook: {e}")
-        return None
+        raise Exception(f"Erro ao acessar Outlook: {e}")
 
     inicio = time.time()
     while time.time() - inicio < tempo_maximo:
@@ -80,10 +78,10 @@ def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_V
         except:
             pass
         time.sleep(intervalo)
-    return None
+    raise Exception("Código não encontrado no e-mail dentro do tempo limite.")
 
 # -----------------------------------------------------------------------------
-# FUNÇÕES DE NAVEGAÇÃO
+# FUNÇÕES DE NAVEGAÇÃO (sem prints)
 # -----------------------------------------------------------------------------
 
 def fazer_login(page, iselic, login, senha):
@@ -107,7 +105,6 @@ def preencher_otp_e_concluir(page, codigo):
     page.click('#kc-login')
     page.wait_for_timeout(5000)
     if page.locator('a[href="/portal-selic/oauth2/authorization/sso"]').count() > 0:
-        print("Página SSO detectada. Clicando no link...")
         page.click('a[href="/portal-selic/oauth2/authorization/sso"]')
         page.wait_for_selector('a:has-text("Extrato")', timeout=60000)
     else:
@@ -132,50 +129,111 @@ def obter_frame(page):
     return frame
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO DE DOWNLOAD USANDO EXPECT_DOWNLOAD
+# FUNÇÃO DE DOWNLOAD (sem prints)
 # -----------------------------------------------------------------------------
 
-def baixar_arquivo(page, descricao, frame=None):
-    """
-    Tenta baixar o arquivo usando expect_download diretamente no clique.
-    Aguarda até TIMEOUT_DOWNLOAD_INICIO ms para o download começar.
-    """
+def baixar_arquivo_por_interceptacao(page, descricao, frame=None, timeout_captura=TIMEOUT_CAPTURA_RESPOSTA):
     if frame is None:
         frame = obter_frame(page)
 
-    seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-    if frame.locator(seletor).count() == 0:
-        seletor = '[title="Download"]'
-    elemento = frame.locator(seletor).first
+    url_pattern = "https://www.rtm.selic.gov.br/extrato-selic-spring/rest/extrato-custo-selic-pdf/pdf/download?ticket="
 
-    # Espera o elemento estar visível e rolável
-    elemento.scroll_into_view_if_needed()
-    time.sleep(0.5)
-
-    print(f"Tentando clicar no download (timeout de {TIMEOUT_DOWNLOAD_INICIO/1000}s)...")
+    # Estratégia 1: Clique + captura de resposta
     try:
-        with page.expect_download(timeout=TIMEOUT_DOWNLOAD_INICIO) as download_info:
+        seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+        if frame.locator(seletor).count() == 0:
+            seletor = '[title="Download"]'
+        elemento = frame.locator(seletor).first
+        with page.expect_response(
+            lambda response: response.url.startswith(url_pattern) and response.status == 200,
+            timeout=timeout_captura
+        ) as response_info:
             elemento.click(force=True, timeout=5000)
-        download = download_info.value
+        response = response_info.value
+        download_url = response.url
+        return baixar_por_url(page, download_url, descricao)
     except Exception as e:
-        raise Exception(f"Download não iniciou após clique: {e}")
+        pass  # Falha silenciosa, tenta próxima estratégia
 
-    # Aguarda o download completo e salva
-    nome_original = download.suggested_filename
-    destino = os.path.join(DOWNLOAD_DIR, nome_original)
-    if os.path.exists(destino):
-        os.remove(destino)
-    download.save_as(destino)
-    print(f"Download realizado: {destino}")
-    return destino
+    # Estratégia 2: Extrair ticket do HTML
+    try:
+        ticket = frame.evaluate('''
+            () => {
+                const el = document.querySelector('[data-ticket]');
+                if (el) return el.dataset.ticket;
+                const input = document.querySelector('input[name="ticket"]');
+                if (input) return input.value;
+                const ls = localStorage.getItem('ticket');
+                if (ls) return ls;
+                const links = document.querySelectorAll('a[href*="ticket="]');
+                for (let a of links) {
+                    const match = a.href.match(/ticket=([^&]+)/);
+                    if (match) return match[1];
+                }
+                return null;
+            }
+        ''')
+        if ticket:
+            download_url = f"{url_pattern}{ticket}"
+            return baixar_por_url(page, download_url, descricao)
+    except Exception as e:
+        pass
+
+    # Estratégia 3: Eventos manuais
+    try:
+        seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+        if frame.locator(seletor).count() == 0:
+            seletor = '[title="Download"]'
+        elemento = frame.locator(seletor).first
+        frame.evaluate('''
+            (el) => {
+                const events = ['mousedown', 'mouseup', 'click'];
+                events.forEach(eventType => {
+                    const event = new MouseEvent(eventType, { bubbles: true, cancelable: true });
+                    el.dispatchEvent(event);
+                });
+            }
+        ''', elemento)
+        time.sleep(2)
+        with page.expect_response(
+            lambda response: response.url.startswith(url_pattern) and response.status == 200,
+            timeout=timeout_captura
+        ) as response_info:
+            pass
+        response = response_info.value
+        download_url = response.url
+        return baixar_por_url(page, download_url, descricao)
+    except Exception as e:
+        pass
+
+    raise Exception("Não foi possível obter a URL de download.")
+
+def baixar_por_url(page, url, descricao):
+    try:
+        page.evaluate(f'''
+            const a = document.createElement('a');
+            a.href = '{url}';
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        ''')
+        with page.expect_download(timeout=TIMEOUT_DOWNLOAD_COMPLETO) as download_info:
+            pass
+        download = download_info.value
+        nome_original = download.suggested_filename
+        destino = os.path.join(DOWNLOAD_DIR, nome_original)
+        if os.path.exists(destino):
+            os.remove(destino)
+        download.save_as(destino)
+        return destino
+    except Exception as e:
+        raise Exception(f"Falha ao baixar arquivo: {e}")
 
 def acessar_asel_e_baixar(page, descricao):
     frame = obter_frame(page)
     seletor_asel = 'div.itemNavegacao:has-text("ASEL")'
-    try:
-        frame.wait_for_selector(seletor_asel, state="visible", timeout=30000)
-    except Exception as e:
-        raise Exception(f"ASEL não encontrado: {e}")
+    frame.wait_for_selector(seletor_asel, state="visible", timeout=30000)
     asel = frame.locator(seletor_asel).first
     asel.scroll_into_view_if_needed()
     time.sleep(0.5)
@@ -183,8 +241,7 @@ def acessar_asel_e_baixar(page, descricao):
     time.sleep(3)
     frame.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-    # Baixa o ASEL usando a mesma função
-    baixar_arquivo(page, descricao + "_ASEL", frame=frame)
+    baixar_arquivo_por_interceptacao(page, descricao + "_ASEL", frame=frame)
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -200,19 +257,16 @@ def main():
         ("Selic PR", "80230774"),
     ]
 
-    print(f"Downloads em: {DOWNLOAD_DIR}")
-    print(f"Timeout para início do download: {TIMEOUT_DOWNLOAD_INICIO/1000}s")
-    print(f"Timeout para conclusão do download: {TIMEOUT_DOWNLOAD_COMPLETO/1000}s\n")
+    sucesso = True
 
     with sync_playwright() as p:
         for descricao, iselic in credenciais:
-            print(f"\n=== {descricao} (iSelic: {iselic}) ===")
             try:
                 login, senha = ler_credencial_selic(descricao)
-                print(f"Login: {login}")
             except Exception as e:
-                print(f"ERRO ao ler credenciais: {e}")
-                continue
+                print(f"Erro ao ler credenciais para {descricao}: {e}")
+                sucesso = False
+                break
 
             browser = p.chromium.launch(
                 channel="msedge",
@@ -224,48 +278,30 @@ def main():
 
             try:
                 fazer_login(page, iselic, login, senha)
-
-                print(f"Aguardando {TEMPO_ESPERA_INICIAL}s para o e-mail...")
                 time.sleep(TEMPO_ESPERA_INICIAL)
-
-                print("Buscando o código no e-mail...")
                 codigo = obter_codigo_do_email()
-                if not codigo:
-                    raise Exception("Código não encontrado.")
-                print(f"Código obtido: {codigo}")
-
                 preencher_otp_e_concluir(page, codigo)
-
                 navegar_ate_custo_selic(page)
-                print("Baixando Custo Selic...")
-                baixar_arquivo(page, descricao)
-
-                print("Acessando ASEL...")
+                baixar_arquivo_por_interceptacao(page, descricao)
                 acessar_asel_e_baixar(page, descricao)
-
-                print(f"Finalizado {descricao}.")
-
             except Exception as e:
-                print(f"\n!!! ERRO CRÍTICO para {descricao}: {e}")
+                print(f"Erro ao processar {descricao}: {e}")
+                # Salva screenshot em caso de erro
                 try:
                     nome_imagem = f"erro_{descricao.replace(' ', '_')}_{int(time.time())}.png"
                     page.screenshot(path=nome_imagem)
-                    caminho_completo = os.path.abspath(nome_imagem)
-                    print(f"Screenshot salvo: {caminho_completo}")
-                    subprocess.run(["start", caminho_completo], shell=True)
-                except Exception as ex:
-                    print(f"Não foi possível salvar/abrir screenshot: {ex}")
-
-                print("\n--- O script será interrompido ---")
-                traceback.print_exc()
-                raise
-
+                    print(f"Screenshot salvo: {os.path.abspath(nome_imagem)}")
+                except:
+                    pass
+                sucesso = False
+                raise  # Interrompe a execução
             finally:
                 context.close()
                 browser.close()
                 time.sleep(5)
 
-        print("\nTodos os processos concluídos com sucesso!")
+    if sucesso:
+        print("Arquivos de custo Selic baixados com sucesso.")
 
 if __name__ == "__main__":
     main()
