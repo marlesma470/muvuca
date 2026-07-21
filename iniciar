@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - CORREÇÃO DA NAVEGAÇÃO
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM IFRAME
 # =============================================================================
 
 import os
@@ -112,75 +112,65 @@ def preencher_otp_e_concluir(page, codigo):
 def navegar_ate_custo_selic(page):
     # Clica em Extrato
     page.click('a:has-text("Extrato")')
-    # Aguarda o link Custo Selic
+    # Aguarda o submenu e clica em Custo Selic
     page.wait_for_selector('a[href*="custo-selic"]', timeout=30000)
     page.click('a[href*="custo-selic"]')
-    # Aguarda o carregamento da página (pode levar tempo por causa do Angular)
-    page.wait_for_load_state("networkidle", timeout=60000)
-    time.sleep(3)  # pausa extra
+    # Aguarda o iframe carregar (o src contém "custo-selic")
+    page.wait_for_selector('iframe#conteudo[src*="custo-selic"]', timeout=60000)
+    # Aguarda o carregamento do conteúdo do iframe
+    time.sleep(3)
 
-    # Verifica se a página carregou procurando por múltiplos indicadores
-    # ao invés de um título específico que pode não existir
-    indicadores = [
-        'table.cdk-table',
-        'button.linkAcaoIcone.iconeBaixar',
-        '[title="Download"]',
-        'div.itemNavegacao:has-text("ASEL")',
-        'div.itemNavegacao:has-text("PDF")'
-    ]
-    encontrado = False
-    for selector in indicadores:
-        try:
-            if page.locator(selector).count() > 0:
-                print(f"Indicador de carregamento encontrado: {selector}")
-                encontrado = True
+def obter_frame(page):
+    """Retorna o frame principal onde está o conteúdo do Custo Selic."""
+    frame = page.frame(name="conteudo") or page.frame(url=re.compile(r"custo-selic"))
+    if not frame:
+        # Fallback: qualquer iframe que contenha "custo-selic" no src
+        for f in page.frames:
+            if f.url and "custo-selic" in f.url:
+                frame = f
                 break
-        except:
-            continue
-    if not encontrado:
-        # Último recurso: espera 5 segundos adicionais e assume que carregou
-        print("Nenhum indicador específico encontrado, aguardando mais 5 segundos...")
-        time.sleep(5)
-
-    # Adicional: verifica se há algum erro na tela
-    try:
-        if page.locator('text=Erro').count() > 0:
-            raise Exception("Página de erro detectada.")
-    except:
-        pass
+    if not frame:
+        raise Exception("Não foi possível encontrar o iframe do Custo Selic.")
+    return frame
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO
+# FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO (DENTRO DO IFRAME)
 # -----------------------------------------------------------------------------
 
-def baixar_arquivo_por_interceptacao(page, descricao):
+def baixar_arquivo_por_interceptacao(page, descricao, frame=None):
     """
-    Tenta baixar o arquivo interceptando a requisição de download.
-    Estratégias:
-    1. Clica no botão e captura a requisição com wait_for_response.
-    2. Se falhar, extrai o ticket do HTML e constrói a URL.
-    3. Se falhar, tenta forçar o clique via JavaScript.
+    Tenta baixar o arquivo usando interceptação de requisição.
+    Se frame for None, tenta obter automaticamente.
     """
+    if frame is None:
+        frame = obter_frame(page)
+
+    # Padrão da URL de download
     url_pattern = "https://www.rtm.selic.gov.br/extrato-selic-spring/rest/extrato-custo-selic-pdf/pdf/download?ticket="
 
-    # ---- ESTRATÉGIA 1: Clique + captura de resposta ----
+    # ---- ESTRATÉGIA 1: Clique no botão dentro do frame + captura de resposta ----
     try:
+        # Localiza o botão de download dentro do frame
+        seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+        if frame.locator(seletor).count() > 0:
+            elemento = frame.locator(seletor).first
+        else:
+            # Tenta seletor genérico
+            elemento = frame.locator('[title="Download"]').first
+
+        print("Tentando clicar no botão de download dentro do iframe...")
         with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=15000) as response_info:
-            seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-            if page.locator(seletor).count() > 0:
-                page.locator(seletor).first.click(force=True, timeout=5000)
-            else:
-                page.locator('[title="Download"]').first.click(force=True, timeout=5000)
+            elemento.click(force=True, timeout=5000)
         response = response_info.value
         download_url = response.url
         print(f"Requisição de download capturada: {download_url}")
         return baixar_por_url(page, download_url, descricao)
     except Exception as e:
-        print(f"Estratégia 1 (clique + captura) falhou: {e}")
+        print(f"Estratégia 1 (clique no frame) falhou: {e}")
 
-    # ---- ESTRATÉGIA 2: Extrair ticket do HTML ----
+    # ---- ESTRATÉGIA 2: Extrair ticket do HTML dentro do frame ----
     try:
-        ticket = page.evaluate('''
+        ticket = frame.evaluate('''
             () => {
                 const el = document.querySelector('[data-ticket]');
                 if (el) return el.dataset.ticket;
@@ -198,18 +188,18 @@ def baixar_arquivo_por_interceptacao(page, descricao):
         ''')
         if ticket:
             download_url = f"{url_pattern}{ticket}"
-            print(f"Ticket extraído do HTML: {ticket}")
+            print(f"Ticket extraído do HTML do iframe: {ticket}")
             return baixar_por_url(page, download_url, descricao)
     except Exception as e:
         print(f"Estratégia 2 (extrair ticket) falhou: {e}")
 
-    # ---- ESTRATÉGIA 3: Tentar clicar via JavaScript com mais eventos ----
+    # ---- ESTRATÉGIA 3: Tentar clicar via JavaScript com eventos manuais ----
     try:
         seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-        if page.locator(seletor).count() == 0:
+        if frame.locator(seletor).count() == 0:
             seletor = '[title="Download"]'
-        elemento = page.locator(seletor).first
-        page.evaluate('''
+        elemento = frame.locator(seletor).first
+        frame.evaluate('''
             (el) => {
                 const events = ['mousedown', 'mouseup', 'click'];
                 events.forEach(eventType => {
@@ -218,8 +208,9 @@ def baixar_arquivo_por_interceptacao(page, descricao):
                 });
             }
         ''', elemento)
-        time.sleep(3)
+        time.sleep(2)
         with page.expect_response(lambda response: response.url.startswith(url_pattern) and response.status == 200, timeout=10000) as response_info:
+            # Já foi disparado, apenas espera a resposta
             pass
         response = response_info.value
         download_url = response.url
@@ -231,7 +222,9 @@ def baixar_arquivo_por_interceptacao(page, descricao):
     raise Exception("Não foi possível obter a URL de download.")
 
 def baixar_por_url(page, url, descricao):
+    """Baixa o arquivo a partir de uma URL, criando um link no DOM da página principal."""
     try:
+        # Cria um link <a> na página principal (não no frame) para evitar problemas de cross-origin
         page.evaluate(f'''
             const a = document.createElement('a');
             a.href = '{url}';
@@ -254,18 +247,28 @@ def baixar_por_url(page, url, descricao):
         raise Exception(f"Falha ao baixar a partir da URL: {e}")
 
 def acessar_asel_e_baixar(page, descricao):
+    # Obtém o frame atual
+    frame = obter_frame(page)
+
+    # Clica no ASEL dentro do frame
     seletor_asel = 'div.itemNavegacao:has-text("ASEL")'
     try:
-        page.wait_for_selector(seletor_asel, state="visible", timeout=30000)
+        frame.wait_for_selector(seletor_asel, state="visible", timeout=30000)
     except Exception as e:
-        raise Exception(f"ASEL não encontrado: {e}")
-    asel = page.locator(seletor_asel).first
+        raise Exception(f"ASEL não encontrado dentro do iframe: {e}")
+
+    asel = frame.locator(seletor_asel).first
     asel.scroll_into_view_if_needed()
     time.sleep(0.5)
     asel.click()
-    page.wait_for_load_state("networkidle", timeout=60000)
+
+    # Aguarda o carregamento da página ASEL (dentro do mesmo iframe)
+    time.sleep(3)
+    frame.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-    baixar_arquivo_por_interceptacao(page, descricao + "_ASEL")
+
+    # Baixa o arquivo ASEL (usa o mesmo método, mas agora o ticket pode ser diferente)
+    baixar_arquivo_por_interceptacao(page, descricao + "_ASEL", frame=frame)
 
 # -----------------------------------------------------------------------------
 # MAIN
