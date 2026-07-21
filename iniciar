@@ -6,6 +6,7 @@ import win32gui
 import win32process
 import psutil
 from pynput import mouse, keyboard
+import win32com.client  # Para ler atalhos .lnk
 
 # ================= CONFIGURACOES =================
 STOP_KEY = keyboard.Key.esc
@@ -17,10 +18,29 @@ def obter_caminho_executavel():
     print("GRAVADOR DE MACROS UNIVERSAL")
     print("="*60)
     while True:
-        exe_path = input("Caminho completo do executavel (ex: C:\\Programas\\MeuSistema.exe): ").strip()
-        if exe_path and os.path.exists(exe_path):
-            return exe_path
-        print("Arquivo nao encontrado. Tente novamente.")
+        caminho = input("Caminho do executavel ou atalho (.exe ou .lnk): ").strip()
+        if not caminho:
+            print("Caminho nao pode estar vazio.")
+            continue
+        if not os.path.exists(caminho):
+            print("Arquivo nao encontrado. Tente novamente.")
+            continue
+        # Se for atalho, resolve o caminho real
+        if caminho.lower().endswith('.lnk'):
+            try:
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shortcut = shell.CreateShortCut(caminho)
+                caminho_real = shortcut.TargetPath
+                if not os.path.exists(caminho_real):
+                    print("O atalho aponta para um arquivo inexistente.")
+                    continue
+                print("Atalho resolvido para: {}".format(caminho_real))
+                return caminho_real
+            except Exception as e:
+                print("Erro ao ler o atalho: {}".format(e))
+                continue
+        else:
+            return caminho
 
 def get_desktop_path():
     return os.path.join(os.path.expanduser("~"), "Desktop")
@@ -69,10 +89,10 @@ def is_process_running(process_name):
 
 # ================= MAIN =================
 def main():
-    # Obter caminho do executavel
+    # Obter caminho do executavel (suporta .lnk)
     exe_path = obter_caminho_executavel()
     process_name = os.path.basename(exe_path)
-    window_title = os.path.splitext(process_name)[0]  # sem extensao, para fallback
+    window_title = os.path.splitext(process_name)[0]  # fallback
 
     # Variaveis globais
     global recording, actions, start_time, hwnd, program_running
