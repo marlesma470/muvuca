@@ -4,8 +4,10 @@
 # código de e-mail, download dos arquivos Custo Selic e ASEL, repetindo para
 # múltiplas credenciais.
 # 
-# ALTERAÇÃO IMPORTANTE: OS ARQUIVOS SEMPRE SERÃO SALVOS NA PASTA "DOWNLOADS"
-# DO USUÁRIO (C:\Users\[Usuario]\Downloads)
+# ALTERAÇÕES:
+# - Após o login, aguarda 40 segundos fixos antes de verificar o e-mail.
+# - Sempre pega o último e-mail recebido com o assunto "Código Temporário SELIC".
+# - Todos os arquivos são salvos na pasta "Downloads" do usuário.
 # =============================================================================
 
 import os
@@ -24,8 +26,12 @@ import win32com.client
 DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Tempo máximo de espera para o e-mail (segundos)
-TEMPO_ESPERA_EMAIL = 120
+# Tempo de espera inicial após o login (segundos) antes de verificar o e-mail
+TEMPO_ESPERA_INICIAL = 40
+
+# Tempo máximo de busca pelo e-mail (segundos) após a espera inicial
+TEMPO_MAXIMO_BUSCA = 60
+
 # Intervalo entre verificações de e-mail
 INTERVALO_VERIFICACAO = 5
 
@@ -64,11 +70,10 @@ def ler_credencial_selic(descricao):
 # FUNÇÃO PARA EXTRAIR O CÓDIGO DO E-MAIL (OUTLOOK)
 # -----------------------------------------------------------------------------
 
-def obter_codigo_do_email(tempo_espera=TEMPO_ESPERA_EMAIL, intervalo=INTERVALO_VERIFICACAO):
+def obter_codigo_do_email(tempo_maximo=TEMPO_MAXIMO_BUSCA, intervalo=INTERVALO_VERIFICACAO):
     """
-    Aguarda até 'tempo_espera' segundos por um e-mail com assunto
-    "Código Temporário SELIC" na Caixa de Entrada padrão.
-    Extrai o código de 6 dígitos do corpo HTML.
+    Procura na Caixa de Entrada o e-mail mais recente com assunto
+    "Código Temporário SELIC" e extrai o código de 6 dígitos do corpo HTML.
     Retorna o código como string ou None se não encontrado.
     """
     outlook = None
@@ -81,7 +86,7 @@ def obter_codigo_do_email(tempo_espera=TEMPO_ESPERA_EMAIL, intervalo=INTERVALO_V
         return None
 
     inicio = time.time()
-    while time.time() - inicio < tempo_espera:
+    while time.time() - inicio < tempo_maximo:
         try:
             items = inbox.Items
             items.Sort("[ReceivedTime]", True)  # Mais recente primeiro
@@ -216,6 +221,7 @@ def main():
     ]
 
     print(f"Todos os arquivos serão salvos em: {DOWNLOAD_DIR}")
+    print(f"Aguardando {TEMPO_ESPERA_INICIAL} segundos após cada login para verificar o e-mail.\n")
 
     # Inicia o Playwright
     with sync_playwright() as p:
@@ -253,24 +259,28 @@ def main():
                 # 1) Login inicial
                 fazer_login(page, iselic, login, senha)
 
-                # 2) Aguarda e obtém código do e-mail
-                print("Aguardando e-mail com código temporário...")
+                # 2) Aguarda 40 segundos fixos para o e-mail chegar
+                print(f"Aguardando {TEMPO_ESPERA_INICIAL} segundos para o envio do código...")
+                time.sleep(TEMPO_ESPERA_INICIAL)
+
+                # 3) Busca o código no e-mail (pega o mais recente)
+                print("Procurando o código no e-mail...")
                 codigo = obter_codigo_do_email()
                 if not codigo:
                     raise Exception("Código não encontrado no e-mail dentro do tempo limite.")
                 print(f"Código obtido: {codigo}")
 
-                # 3) Preenche OTP e conclui login
+                # 4) Preenche OTP e conclui login
                 preencher_otp_e_concluir(page, codigo)
 
-                # 4) Navega até Custo Selic
+                # 5) Navega até Custo Selic
                 navegar_ate_custo_selic(page)
 
-                # 5) Primeiro download (Custo Selic)
+                # 6) Primeiro download (Custo Selic)
                 print("Baixando arquivo do Custo Selic...")
                 baixar_arquivo(page)
 
-                # 6) Acessa ASEL e baixa o segundo arquivo
+                # 7) Acessa ASEL e baixa o segundo arquivo
                 print("Acessando ASEL e baixando arquivo...")
                 acessar_asel_e_baixar(page)
 
