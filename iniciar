@@ -1,5 +1,5 @@
 # =============================================================================
-# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM TIME OUTS AJUSTADOS
+# SELIC_DOWNLOAD_AUTOMATIZADO.PY - VERSÃO COM EXPECT_DOWNLOAD
 # =============================================================================
 
 import os
@@ -17,13 +17,13 @@ import win32com.client
 DOWNLOAD_DIR = os.path.join(os.environ["USERPROFILE"], "Downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-TEMPO_ESPERA_INICIAL = 15       # Aguarda após login antes de buscar e-mail
-TEMPO_MAXIMO_BUSCA = 60         # Busca e-mail por até 60 segundos
+TEMPO_ESPERA_INICIAL = 15
+TEMPO_MAXIMO_BUSCA = 60
 INTERVALO_VERIFICACAO = 5
 
-# --- TEMPOS DE DOWNLOAD (AUMENTADOS) ---
-TIMEOUT_CAPTURA_RESPOSTA = 30000   # 30 segundos para capturar a requisição
-TIMEOUT_DOWNLOAD_COMPLETO = 60000  # 60 segundos para baixar o arquivo
+# --- TEMPOS DE DOWNLOAD ---
+TIMEOUT_DOWNLOAD_INICIO = 30000   # 30 segundos para o download começar após clique
+TIMEOUT_DOWNLOAD_COMPLETO = 60000 # 60 segundos para finalizar
 
 # -----------------------------------------------------------------------------
 # LEITURA DE CREDENCIAIS
@@ -121,7 +121,6 @@ def navegar_ate_custo_selic(page):
     time.sleep(3)
 
 def obter_frame(page):
-    """Retorna o frame principal onde está o conteúdo do Custo Selic."""
     frame = page.frame(name="conteudo") or page.frame(url=re.compile(r"custo-selic"))
     if not frame:
         for f in page.frames:
@@ -133,118 +132,42 @@ def obter_frame(page):
     return frame
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO DE DOWNLOAD POR INTERCEPTAÇÃO (COM TIMEOUTS AUMENTADOS)
+# FUNÇÃO DE DOWNLOAD USANDO EXPECT_DOWNLOAD
 # -----------------------------------------------------------------------------
 
-def baixar_arquivo_por_interceptacao(page, descricao, frame=None, timeout_captura=TIMEOUT_CAPTURA_RESPOSTA):
+def baixar_arquivo(page, descricao, frame=None):
     """
-    Tenta baixar o arquivo usando interceptação de requisição.
-    Aguarda até timeout_captura milissegundos pela resposta.
+    Tenta baixar o arquivo usando expect_download diretamente no clique.
+    Aguarda até TIMEOUT_DOWNLOAD_INICIO ms para o download começar.
     """
     if frame is None:
         frame = obter_frame(page)
 
-    url_pattern = "https://www.rtm.selic.gov.br/extrato-selic-spring/rest/extrato-custo-selic-pdf/pdf/download?ticket="
+    seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
+    if frame.locator(seletor).count() == 0:
+        seletor = '[title="Download"]'
+    elemento = frame.locator(seletor).first
 
-    # ---- ESTRATÉGIA 1: Clique no botão + captura de resposta ----
+    # Espera o elemento estar visível e rolável
+    elemento.scroll_into_view_if_needed()
+    time.sleep(0.5)
+
+    print(f"Tentando clicar no download (timeout de {TIMEOUT_DOWNLOAD_INICIO/1000}s)...")
     try:
-        seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-        if frame.locator(seletor).count() == 0:
-            seletor = '[title="Download"]'
-        elemento = frame.locator(seletor).first
-
-        print(f"Aguardando até {timeout_captura/1000} segundos pela resposta de download...")
-        with page.expect_response(
-            lambda response: response.url.startswith(url_pattern) and response.status == 200,
-            timeout=timeout_captura
-        ) as response_info:
+        with page.expect_download(timeout=TIMEOUT_DOWNLOAD_INICIO) as download_info:
             elemento.click(force=True, timeout=5000)
-
-        response = response_info.value
-        download_url = response.url
-        print(f"Requisição de download capturada: {download_url}")
-        return baixar_por_url(page, download_url, descricao)
-    except Exception as e:
-        print(f"Estratégia 1 falhou: {e}")
-
-    # ---- ESTRATÉGIA 2: Extrair ticket do HTML ----
-    try:
-        ticket = frame.evaluate('''
-            () => {
-                const el = document.querySelector('[data-ticket]');
-                if (el) return el.dataset.ticket;
-                const input = document.querySelector('input[name="ticket"]');
-                if (input) return input.value;
-                const ls = localStorage.getItem('ticket');
-                if (ls) return ls;
-                const links = document.querySelectorAll('a[href*="ticket="]');
-                for (let a of links) {
-                    const match = a.href.match(/ticket=([^&]+)/);
-                    if (match) return match[1];
-                }
-                return null;
-            }
-        ''')
-        if ticket:
-            download_url = f"{url_pattern}{ticket}"
-            print(f"Ticket extraído: {ticket}")
-            return baixar_por_url(page, download_url, descricao)
-    except Exception as e:
-        print(f"Estratégia 2 falhou: {e}")
-
-    # ---- ESTRATÉGIA 3: Eventos manuais ----
-    try:
-        seletor = 'button.linkAcaoIcone.iconeBaixar[title="Download"]'
-        if frame.locator(seletor).count() == 0:
-            seletor = '[title="Download"]'
-        elemento = frame.locator(seletor).first
-        frame.evaluate('''
-            (el) => {
-                const events = ['mousedown', 'mouseup', 'click'];
-                events.forEach(eventType => {
-                    const event = new MouseEvent(eventType, { bubbles: true, cancelable: true });
-                    el.dispatchEvent(event);
-                });
-            }
-        ''', elemento)
-        time.sleep(2)
-        with page.expect_response(
-            lambda response: response.url.startswith(url_pattern) and response.status == 200,
-            timeout=timeout_captura
-        ) as response_info:
-            pass
-        response = response_info.value
-        download_url = response.url
-        print(f"Requisição capturada após eventos: {download_url}")
-        return baixar_por_url(page, download_url, descricao)
-    except Exception as e:
-        print(f"Estratégia 3 falhou: {e}")
-
-    raise Exception("Não foi possível obter a URL de download.")
-
-def baixar_por_url(page, url, descricao):
-    """Baixa o arquivo a partir de uma URL com timeout estendido."""
-    try:
-        page.evaluate(f'''
-            const a = document.createElement('a');
-            a.href = '{url}';
-            a.download = '';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-        ''')
-        with page.expect_download(timeout=TIMEOUT_DOWNLOAD_COMPLETO) as download_info:
-            pass
         download = download_info.value
-        nome_original = download.suggested_filename
-        destino = os.path.join(DOWNLOAD_DIR, nome_original)
-        if os.path.exists(destino):
-            os.remove(destino)
-        download.save_as(destino)
-        print(f"Download realizado: {destino}")
-        return destino
     except Exception as e:
-        raise Exception(f"Falha ao baixar: {e}")
+        raise Exception(f"Download não iniciou após clique: {e}")
+
+    # Aguarda o download completo e salva
+    nome_original = download.suggested_filename
+    destino = os.path.join(DOWNLOAD_DIR, nome_original)
+    if os.path.exists(destino):
+        os.remove(destino)
+    download.save_as(destino)
+    print(f"Download realizado: {destino}")
+    return destino
 
 def acessar_asel_e_baixar(page, descricao):
     frame = obter_frame(page)
@@ -260,8 +183,8 @@ def acessar_asel_e_baixar(page, descricao):
     time.sleep(3)
     frame.wait_for_load_state("networkidle", timeout=60000)
     time.sleep(2)
-    # Baixa o arquivo ASEL com o mesmo timeout
-    baixar_arquivo_por_interceptacao(page, descricao + "_ASEL", frame=frame)
+    # Baixa o ASEL usando a mesma função
+    baixar_arquivo(page, descricao + "_ASEL", frame=frame)
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -278,7 +201,7 @@ def main():
     ]
 
     print(f"Downloads em: {DOWNLOAD_DIR}")
-    print(f"Timeout para captura de resposta: {TIMEOUT_CAPTURA_RESPOSTA/1000}s")
+    print(f"Timeout para início do download: {TIMEOUT_DOWNLOAD_INICIO/1000}s")
     print(f"Timeout para conclusão do download: {TIMEOUT_DOWNLOAD_COMPLETO/1000}s\n")
 
     with sync_playwright() as p:
@@ -315,7 +238,7 @@ def main():
 
                 navegar_ate_custo_selic(page)
                 print("Baixando Custo Selic...")
-                baixar_arquivo_por_interceptacao(page, descricao)
+                baixar_arquivo(page, descricao)
 
                 print("Acessando ASEL...")
                 acessar_asel_e_baixar(page, descricao)
