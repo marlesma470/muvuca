@@ -9,7 +9,7 @@ from pynput import mouse, keyboard
 STOP_KEY = keyboard.Key.esc
 
 def listar_janelas():
-    """Lista janelas visíveis com título e nome do processo."""
+    """Lista janelas visíveis com título, handle e PID do processo."""
     def callback(hwnd, hwnds):
         if win32gui.IsWindowVisible(hwnd):
             title = win32gui.GetWindowText(hwnd)
@@ -19,8 +19,9 @@ def listar_janelas():
                     proc = psutil.Process(pid)
                     nome = proc.name()
                 except:
+                    pid = 0
                     nome = "desconhecido"
-                hwnds.append((hwnd, title, nome))
+                hwnds.append((hwnd, title, nome, pid))
         return True
     hwnds = []
     win32gui.EnumWindows(callback, hwnds)
@@ -28,14 +29,14 @@ def listar_janelas():
 
 def escolher_janela(janelas):
     print("\nJanelas abertas encontradas:")
-    for i, (hwnd, title, proc) in enumerate(janelas):
-        print("{}. {} (processo: {})".format(i+1, title, proc))
+    for i, (hwnd, title, proc, pid) in enumerate(janelas):
+        print("{}. {} (processo: {} | PID: {})".format(i+1, title, proc, pid))
     while True:
         try:
             opcao = input("Escolha o numero da janela para gravar: ").strip()
             idx = int(opcao) - 1
             if 0 <= idx < len(janelas):
-                return janelas[idx][0]
+                return janelas[idx]
             print("Opcao invalida.")
         except ValueError:
             print("Digite um numero valido.")
@@ -52,21 +53,28 @@ def is_point_inside_window(x, y, hwnd):
     left, top, right, bottom = get_window_rect(hwnd)
     return left <= x <= right and top <= y <= bottom
 
+def get_process_id_from_window(hwnd):
+    """Retorna o PID do processo que possui a janela."""
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        return pid
+    except:
+        return 0
+
 def main():
     print("="*60)
     print("GRAVADOR DE MACROS - COM SELECAO DE JANELA")
     print("="*60)
 
-    # Lista janelas abertas
     janelas = listar_janelas()
     if not janelas:
         print("Nenhuma janela com titulo encontrada.")
         return
 
-    hwnd = escolher_janela(janelas)
-    title = win32gui.GetWindowText(hwnd)
+    hwnd, title, proc_name, pid = escolher_janela(janelas)
     left, top, right, bottom = get_window_rect(hwnd)
-    print("Janela selecionada: '{}' (posicao: {}x{} - {}x{})".format(title, left, top, right, bottom))
+    print("Janela selecionada: '{}' (PID: {}, posicao: {}x{} - {}x{})".format(
+        title, pid, left, top, right, bottom))
 
     # Iniciar gravacao
     recording = True
@@ -80,7 +88,6 @@ def main():
         nonlocal actions, start_time
         if not recording or not pressed or hwnd is None:
             return
-        # Log detalhado
         print("Clique detectado em (x={}, y={})".format(x, y))
         if is_point_inside_window(x, y, hwnd):
             left, top, _, _ = get_window_rect(hwnd)
@@ -105,21 +112,27 @@ def main():
             recording = False
             return False
         if recording:
+            # Obter a janela em primeiro plano
             fg_hwnd = win32gui.GetForegroundWindow()
-            if hwnd is not None and fg_hwnd == hwnd:
-                try:
-                    key_name = key.char
-                except AttributeError:
-                    key_name = str(key).replace('Key.', '')
-                action = {
-                    'type': 'key',
-                    'key': key_name,
-                    'timestamp': time.time() - start_time
-                }
-                actions.append(action)
-                print("Tecla '{}' registrada".format(key_name))
+            if fg_hwnd:
+                # Verificar se a janela em foco pertence ao mesmo processo da janela alvo
+                fg_pid = get_process_id_from_window(fg_hwnd)
+                if fg_pid == pid:
+                    try:
+                        key_name = key.char
+                    except AttributeError:
+                        key_name = str(key).replace('Key.', '')
+                    action = {
+                        'type': 'key',
+                        'key': key_name,
+                        'timestamp': time.time() - start_time
+                    }
+                    actions.append(action)
+                    print("Tecla '{}' registrada".format(key_name))
+                else:
+                    print("Tecla ignorada (janela em foco nao pertence ao processo alvo)")
             else:
-                print("Tecla ignorada (janela nao em foco)")
+                print("Tecla ignorada (nenhuma janela em foco)")
 
     with mouse.Listener(on_click=on_click) as mouse_listener, \
          keyboard.Listener(on_press=on_press) as keyboard_listener:
@@ -128,7 +141,6 @@ def main():
         mouse_listener.stop()
         keyboard_listener.stop()
 
-    # Salvar
     print("GRAVACAO FINALIZADA.")
     if actions:
         desktop = get_desktop_path()
