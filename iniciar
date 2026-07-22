@@ -1,91 +1,64 @@
 import json
 import time
-import subprocess
 import os
-import shlex
 import win32gui
 import win32process
 import psutil
 from pynput import mouse, keyboard
-import win32com.client
 
 # ================= CONFIGURACOES =================
 STOP_KEY = keyboard.Key.esc
 
 # ================= FUNCOES =================
 
-def obter_caminho_executavel():
+def listar_janelas_visiveis():
+    """Retorna uma lista de dicionários com handle e título das janelas visíveis com título não vazio."""
+    janelas = []
+    def callback(hwnd, extra):
+        if win32gui.IsWindowVisible(hwnd):
+            titulo = win32gui.GetWindowText(hwnd)
+            if titulo:  # ignora janelas sem título
+                janelas.append({'hwnd': hwnd, 'titulo': titulo})
+        return True
+    win32gui.EnumWindows(callback, None)
+    return janelas
+
+def selecionar_janela():
     print("\n" + "="*60)
     print("GRAVADOR DE MACROS UNIVERSAL")
     print("="*60)
+    print("Listando janelas abertas...\n")
+    janelas = listar_janelas_visiveis()
+    if not janelas:
+        print("Nenhuma janela com titulo encontrada.")
+        return None
+    
+    # Exibe numeradas
+    for i, janela in enumerate(janelas, 1):
+        # Tenta obter o nome do processo para ajudar na identificação
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(janela['hwnd'])
+            processo = psutil.Process(pid)
+            nome_processo = processo.name()
+        except:
+            nome_processo = "desconhecido"
+        print("{}. {} (processo: {})".format(i, janela['titulo'], nome_processo))
+    
+    print("\nDigite o numero da janela que deseja gravar (ou 0 para sair):")
     while True:
-        entrada = input("Caminho do executavel, atalho .lnk ou comando com argumentos: ").strip()
-        if not entrada:
-            print("Caminho nao pode estar vazio.")
-            continue
-
-        # Verifica se o arquivo existe (pode ser .lnk ou .exe)
-        if not os.path.exists(entrada):
-            # Se não existe, pode ser um comando com argumentos
-            partes = shlex.split(entrada)
-            if partes and os.path.exists(partes[0]):
-                # É um executável com argumentos
-                exe_path = partes[0]
-                args = partes[1:] if len(partes) > 1 else []
-                print("Comando identificado: executavel={}, argumentos={}".format(exe_path, args))
-                return exe_path, args
+        try:
+            opcao = int(input("> "))
+            if opcao == 0:
+                return None
+            if 1 <= opcao <= len(janelas):
+                return janelas[opcao-1]
             else:
-                print("Arquivo ou comando nao encontrado. Tente novamente.")
-                continue
-
-        # Se for .lnk, resolve
-        if entrada.lower().endswith('.lnk'):
-            try:
-                shell = win32com.client.Dispatch("WScript.Shell")
-                shortcut = shell.CreateShortCut(entrada)
-                exe_path = shortcut.TargetPath
-                args = shlex.split(shortcut.Arguments) if shortcut.Arguments else []
-                if not os.path.exists(exe_path):
-                    print("O atalho aponta para um executavel inexistente.")
-                    continue
-                print("Atalho resolvido: executavel={}, argumentos={}".format(exe_path, args))
-                return exe_path, args
-            except Exception as e:
-                print("Erro ao ler o atalho: {}".format(e))
-                continue
-        else:
-            # É um .exe direto
-            return entrada, []
+                print("Opcao invalida. Tente novamente.")
+        except ValueError:
+            print("Digite um numero valido.")
 
 def get_desktop_path():
     return os.path.join(os.path.expanduser("~"), "Desktop")
-
-def find_window_by_process(process_name):
-    for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'].lower() == process_name.lower():
-            pid = proc.info['pid']
-            def callback(hwnd, hwnds):
-                if win32gui.IsWindowVisible(hwnd):
-                    _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-                    if found_pid == pid:
-                        hwnds.append(hwnd)
-                return True
-            hwnds = []
-            win32gui.EnumWindows(callback, hwnds)
-            if hwnds:
-                return hwnds[0]
-    return None
-
-def find_window_by_title(title):
-    def callback(hwnd, hwnds):
-        if win32gui.IsWindowVisible(hwnd):
-            window_text = win32gui.GetWindowText(hwnd)
-            if title.lower() in window_text.lower():
-                hwnds.append(hwnd)
-        return True
-    hwnds = []
-    win32gui.EnumWindows(callback, hwnds)
-    return hwnds[0] if hwnds else None
 
 def get_window_rect(hwnd):
     return win32gui.GetWindowRect(hwnd)
@@ -96,76 +69,72 @@ def is_point_inside_window(x, y, hwnd):
     left, top, right, bottom = get_window_rect(hwnd)
     return left <= x <= right and top <= y <= bottom
 
-def is_process_running(process_name):
-    for proc in psutil.process_iter(['name']):
-        if proc.info['name'].lower() == process_name.lower():
-            return True
-    return False
-
 # ================= MAIN =================
 def main():
-    # Obter configurações
-    exe_path, args = obter_caminho_executavel()
-    process_name = os.path.basename(exe_path)
-    window_title = os.path.splitext(process_name)[0]
-
+    # Selecionar janela
+    janela_selecionada = selecionar_janela()
+    if not janela_selecionada:
+        print("Programa encerrado.")
+        return
+    
+    hwnd = janela_selecionada['hwnd']
+    titulo = janela_selecionada['titulo']
+    print("\nJanela selecionada: '{}'".format(titulo))
+    print("Gravacao iniciara quando voce clicar dentro da janela.")
+    print("Pressione ESC a qualquer momento para interromper e salvar.")
+    
     # Variaveis globais
-    global recording, actions, start_time, hwnd, program_running
+    global recording, actions, start_time, program_running
     recording = False
     actions = []
     start_time = None
-    hwnd = None
     program_running = True
-
-    # Abrir aplicativo com argumentos
-    try:
-        comando = [exe_path] + args
-        print("Abrindo: {}".format(' '.join(comando)))
-        subprocess.Popen(comando)
-        inicio = time.time()
-        while True:
-            hwnd = find_window_by_process(process_name)
-            if hwnd:
-                break
-            if window_title:
-                hwnd = find_window_by_title(window_title)
-                if hwnd:
-                    break
-            if time.time() - inicio > 30:
-                print("Tempo limite: aplicativo nao abriu.")
-                return
-            time.sleep(0.5)
-        print("Janela encontrada.")
-    except Exception as e:
-        print("Erro: {}".format(e))
-        return
-
-    # Iniciar gravacao
-    recording = True
-    start_time = time.time()
-    print("GRAVACAO INICIADA automaticamente.")
-    print("Pressione ESC para interromper e salvar.")
-
+    
     # ===== CALLBACKS =====
     def on_click(x, y, button, pressed):
         global recording, actions, start_time, hwnd
-        if not recording or not pressed or hwnd is None:
+        if not pressed:
             return
-        if is_point_inside_window(x, y, hwnd):
-            left, top, _, _ = get_window_rect(hwnd)
-            rel_x = x - left
-            rel_y = y - top
-            action = {
-                'type': 'click',
-                'button': button.name,
-                'x': rel_x,
-                'y': rel_y,
-                'timestamp': time.time() - start_time
-            }
-            actions.append(action)
-            print("Clique {} em ({}, {})".format(button.name, rel_x, rel_y))
-        else:
-            print("Clique fora da janela ignorado.")
+        # Se não estiver gravando, verifica se o clique foi dentro da janela para iniciar
+        if not recording:
+            if is_point_inside_window(x, y, hwnd):
+                recording = True
+                start_time = time.time()
+                print("\nGRAVACAO INICIADA.")
+                # Registra o primeiro clique
+                left, top, _, _ = get_window_rect(hwnd)
+                rel_x = x - left
+                rel_y = y - top
+                action = {
+                    'type': 'click',
+                    'button': button.name,
+                    'x': rel_x,
+                    'y': rel_y,
+                    'timestamp': 0.0
+                }
+                actions.append(action)
+                print("Clique {} em ({}, {})".format(button.name, rel_x, rel_y))
+            else:
+                print("Clique fora da janela. Aguardando clique dentro para iniciar.")
+            return
+        
+        # Se já estiver gravando, registra cliques dentro da janela
+        if recording:
+            if is_point_inside_window(x, y, hwnd):
+                left, top, _, _ = get_window_rect(hwnd)
+                rel_x = x - left
+                rel_y = y - top
+                action = {
+                    'type': 'click',
+                    'button': button.name,
+                    'x': rel_x,
+                    'y': rel_y,
+                    'timestamp': time.time() - start_time
+                }
+                actions.append(action)
+                print("Clique {} em ({}, {})".format(button.name, rel_x, rel_y))
+            else:
+                print("Clique fora da janela ignorado.")
 
     def on_press(key):
         global recording, program_running
@@ -190,12 +159,14 @@ def main():
             else:
                 print("Tecla ignorada (janela nao em foco)")
 
-    # Listeners
+    # Inicia listeners
+    print("\nAguardando clique dentro da janela para iniciar a gravacao...")
     with mouse.Listener(on_click=on_click) as mouse_listener, \
          keyboard.Listener(on_press=on_press) as keyboard_listener:
-        while program_running and recording:
-            if not is_process_running(process_name):
-                print("Aplicativo fechado. Encerrando...")
+        while program_running:
+            # Verifica se a janela ainda existe
+            if not win32gui.IsWindow(hwnd):
+                print("Janela selecionada foi fechada. Encerrando...")
                 recording = False
                 break
             time.sleep(0.5)
