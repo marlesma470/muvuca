@@ -2,11 +2,12 @@ import json
 import time
 import subprocess
 import os
+import shlex
 import win32gui
 import win32process
 import psutil
 from pynput import mouse, keyboard
-import win32com.client  # Para ler atalhos .lnk
+import win32com.client
 
 # ================= CONFIGURACOES =================
 STOP_KEY = keyboard.Key.esc
@@ -18,29 +19,43 @@ def obter_caminho_executavel():
     print("GRAVADOR DE MACROS UNIVERSAL")
     print("="*60)
     while True:
-        caminho = input("Caminho do executavel ou atalho (.exe ou .lnk): ").strip()
-        if not caminho:
+        entrada = input("Caminho do executavel, atalho .lnk ou comando com argumentos: ").strip()
+        if not entrada:
             print("Caminho nao pode estar vazio.")
             continue
-        if not os.path.exists(caminho):
-            print("Arquivo nao encontrado. Tente novamente.")
-            continue
-        # Se for atalho, resolve o caminho real
-        if caminho.lower().endswith('.lnk'):
+
+        # Verifica se o arquivo existe (pode ser .lnk ou .exe)
+        if not os.path.exists(entrada):
+            # Se não existe, pode ser um comando com argumentos
+            partes = shlex.split(entrada)
+            if partes and os.path.exists(partes[0]):
+                # É um executável com argumentos
+                exe_path = partes[0]
+                args = partes[1:] if len(partes) > 1 else []
+                print("Comando identificado: executavel={}, argumentos={}".format(exe_path, args))
+                return exe_path, args
+            else:
+                print("Arquivo ou comando nao encontrado. Tente novamente.")
+                continue
+
+        # Se for .lnk, resolve
+        if entrada.lower().endswith('.lnk'):
             try:
                 shell = win32com.client.Dispatch("WScript.Shell")
-                shortcut = shell.CreateShortCut(caminho)
-                caminho_real = shortcut.TargetPath
-                if not os.path.exists(caminho_real):
-                    print("O atalho aponta para um arquivo inexistente.")
+                shortcut = shell.CreateShortCut(entrada)
+                exe_path = shortcut.TargetPath
+                args = shlex.split(shortcut.Arguments) if shortcut.Arguments else []
+                if not os.path.exists(exe_path):
+                    print("O atalho aponta para um executavel inexistente.")
                     continue
-                print("Atalho resolvido para: {}".format(caminho_real))
-                return caminho_real
+                print("Atalho resolvido: executavel={}, argumentos={}".format(exe_path, args))
+                return exe_path, args
             except Exception as e:
                 print("Erro ao ler o atalho: {}".format(e))
                 continue
         else:
-            return caminho
+            # É um .exe direto
+            return entrada, []
 
 def get_desktop_path():
     return os.path.join(os.path.expanduser("~"), "Desktop")
@@ -89,10 +104,10 @@ def is_process_running(process_name):
 
 # ================= MAIN =================
 def main():
-    # Obter caminho do executavel (suporta .lnk)
-    exe_path = obter_caminho_executavel()
+    # Obter configurações
+    exe_path, args = obter_caminho_executavel()
     process_name = os.path.basename(exe_path)
-    window_title = os.path.splitext(process_name)[0]  # fallback
+    window_title = os.path.splitext(process_name)[0]
 
     # Variaveis globais
     global recording, actions, start_time, hwnd, program_running
@@ -102,10 +117,11 @@ def main():
     hwnd = None
     program_running = True
 
-    # Abrir aplicativo
+    # Abrir aplicativo com argumentos
     try:
-        print("Abrindo {} ...".format(exe_path))
-        subprocess.Popen([exe_path])
+        comando = [exe_path] + args
+        print("Abrindo: {}".format(' '.join(comando)))
+        subprocess.Popen(comando)
         inicio = time.time()
         while True:
             hwnd = find_window_by_process(process_name)
