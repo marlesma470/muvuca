@@ -1,911 +1,390 @@
 import os
-import sys
 import shutil
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta, time
 
-from PySide6.QtCore import Qt, QTimer, QRect, Signal, Slot, QThread
-from PySide6.QtGui import QColor, QPainter, QFont
+from PySide6.QtCore import Qt, QDateTime, QDate, QTime, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-    QTableWidgetItem, QHeaderView, QPushButton, QLabel, QLineEdit,
-    QComboBox, QStatusBar, QMessageBox, QStyledItemDelegate,
-    QApplication, QMenu
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QLineEdit, QPushButton, QComboBox, QCheckBox, QSpinBox,
+    QDateTimeEdit, QGroupBox, QMessageBox, QDialogButtonBox,
+    QProgressDialog, QApplication
 )
 
 from ..models import Agendamento, Periodicidade
+from ..database import get_session, salvar_agendamento, carregar_agendamento_por_nome
 from ..theme_preference import ThemePreference
 from ..logger import logger
-from ..database import (
-    get_session, criar_grupo, salvar_agendamento,
-    carregar_agendamentos, excluir_agendamento, carregar_agendamento_por_nome
-)
-
-from .detail_dialog import AutomationDetailDialog
-from .editar_automacao_dialog import EditarAutomacaoDialog
-from .chat_side import ChatSideWindow
 from ..executor_simples import ExecutorWorker
 
 
-class ProgressBarDelegate(QStyledItemDelegate):
-    def __init__(self, parent=None):
+class EditarAutomacaoDialog(QDialog):
+
+    def __init__(self, agendamento: Agendamento, grupo: str, parent=None):
         super().__init__(parent)
-
-    def paint(self, painter, option, index):
-        if not index.isValid():
-            return
-        table = index.model().parent()
-        if not hasattr(table, 'agendamentos'):
-            super().paint(painter, option, index)
-            return
-        row = index.row()
-        if row < 0 or row >= len(table.agendamentos):
-            super().paint(painter, option, index)
-            return
-        ag = table.agendamentos[row]
-        if not ag:
-            super().paint(painter, option, index)
-            return
-
-        remaining = ag.time_until_next()
-        total_seconds = remaining.total_seconds()
-        if total_seconds < 0:
-            total_seconds = 0
-
-        max_seconds = 86400
-        frac = (max_seconds - total_seconds) / max_seconds
-        percent = max(0, min(1, frac * frac * frac * frac))
-
-        if total_seconds > 3600:
-            bar_color = QColor(0, 180, 0)
-        elif total_seconds > 600:
-            bar_color = QColor(218, 165, 32)
-        else:
-            bar_color = QColor(255, 0, 0)
-
-        painter.save()
-        painter.fillRect(option.rect, QColor(240, 240, 240, 50))
-        painter.setPen(Qt.NoPen)
-
-        bar_rect = QRect(option.rect)
-        bar_rect.setX(bar_rect.x() + 2)
-        bar_rect.setY(bar_rect.y() + 2)
-        bar_rect.setWidth(max(1, int(bar_rect.width() * percent)))
-        bar_rect.setHeight(bar_rect.height() - 4)
-        painter.fillRect(bar_rect, bar_color)
-
-        if total_seconds > 0:
-            days = int(total_seconds // 86400)
-            hours = int((total_seconds % 86400) // 3600)
-            minutes = int((total_seconds % 3600) // 60)
-            seconds = int(total_seconds % 60)
-            if days > 0:
-                texto = f"{days}d {hours}h {minutes}m {seconds}s"
-            elif hours > 0:
-                texto = f"{hours}h {minutes}m {seconds}s"
-            elif minutes > 0:
-                texto = f"{minutes}m {seconds}s"
-            else:
-                texto = f"{seconds}s"
-            texto += " restante"
-        else:
-            texto = "0s"
-
-        if ThemePreference.is_dark():
-            painter.setPen(QColor(255, 255, 255))
-        else:
-            painter.setPen(QColor(0, 0, 0))
-        painter.drawText(option.rect, Qt.AlignCenter, texto)
-        painter.restore()
-
-
-class MainWindow(QMainWindow):
-    agendamentos_atualizados = Signal()
-    execucao_terminada = Signal(str, bool, str, list)
-
-    def __init__(self, grupo: str, parent=None):
-        super().__init__(parent)
-        self.grupo_selecionado = grupo
-        self.eh_todos = (grupo == "Todos")
-        self.pasta_atividades = os.path.join(os.getcwd(), "Atividades")
-        self.pasta_logs = os.path.join(os.getcwd(), "Logs")
-
-        os.makedirs(self.pasta_atividades, exist_ok=True)
-        os.makedirs(self.pasta_logs, exist_ok=True)
-
-        self.agendamentos_completos: List[Agendamento] = []
-        self.agendamentos_exibidos: List[Agendamento] = []
-        self.filtro_texto = ""
-        self.filtro_periodo = "Todas"
-        self.processos_em_execucao: set = set()
-        self.chat_lateral: Optional[ChatSideWindow] = None
-        self._threads_em_execucao: Dict[str, QThread] = {}
-
-        self.timer_segundo = None
-        self.timer_barra = None
-        self.verificar_agendamentos_timer = None
+        self.agendamento_original = agendamento
+        self.grupo = grupo
+        self.script_path_original = agendamento.script_path
+        self.nome_original = agendamento.nome_script
+        self.teste_worker = None
+        self.progress_dialog = None
 
         self._setup_ui()
-        self._connect_signals()
-        self._sincronizar_com_pasta()
-        self._carregar_agendamentos()
-        self._marcar_expirados_na_inicializacao()
-        self._resetar_agendamentos_antigos()
-        self._iniciar_timers()
+        self._carregar_valores()
         self._aplicar_tema()
-
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
-        self.show()
-        logger.info(f"MainWindow inicializada para grupo: {grupo}")
+        self.resize(550, 560)
+        self.setMinimumSize(450, 500)
 
     def _setup_ui(self):
-        titulo = "Executor de Automações - Todos os Grupos" if self.eh_todos else f"Executor de Automações - Grupo {self.grupo_selecionado}"
-        self.setWindowTitle(titulo)
-        self.setMinimumSize(900, 600)
-        self.resize(1300, 800)
+        self.setWindowTitle(f"Editar Automação - {self.agendamento_original.nome_script}")
 
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        header = QWidget()
-        header.setFixedHeight(60)
-        hlayout = QHBoxLayout(header)
-        hlayout.setContentsMargins(10, 5, 10, 5)
+        # Grupo: Nome
+        gb_nome = QGroupBox("Nome da automação")
+        gb_nome.setStyleSheet("QGroupBox { margin-top: 15px; }")
+        nome_layout = QHBoxLayout(gb_nome)
+        self.txt_nome = QLineEdit()
+        self.txt_nome.setPlaceholderText("Digite o nome da automação")
+        nome_layout.addWidget(self.txt_nome)
+        layout.addWidget(gb_nome)
 
-        self.lbl_title = QLabel(titulo)
-        self.lbl_title.setObjectName("title")
+        # Grupo: Agendamento
+        gb_agendamento = QGroupBox("Agendamento")
+        gb_agendamento.setStyleSheet("QGroupBox { margin-top: 15px; }")
+        grid = QGridLayout(gb_agendamento)
+        grid.setVerticalSpacing(10)
+        grid.setHorizontalSpacing(15)
+        grid.setContentsMargins(15, 20, 15, 15)
 
-        self.lbl_clock = QLabel()
-        self.lbl_clock.setObjectName("clock")
-        self.lbl_clock.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.lbl_clock.setFixedWidth(200)
+        grid.addWidget(QLabel("Horário (HH:MM:SS):"), 0, 0)
+        self.dt_horario = QDateTimeEdit()
+        self.dt_horario.setDisplayFormat("HH:mm:ss")
+        self.dt_horario.setTime(QTime(8, 0, 0))
+        self.dt_horario.setCalendarPopup(True)
+        grid.addWidget(self.dt_horario, 0, 1)
 
-        btn_credenciais = QPushButton("Credenciais")
-        btn_credenciais.setObjectName("btn_credenciais")
-        btn_credenciais.setFixedSize(100, 35)
-        btn_credenciais.clicked.connect(self._abrir_credenciais)
+        grid.addWidget(QLabel("Data início:"), 1, 0)
+        self.dt_data_inicio = QDateTimeEdit()
+        self.dt_data_inicio.setDisplayFormat("dd/MM/yyyy")
+        self.dt_data_inicio.setCalendarPopup(True)
+        data_inicio = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        qdate = QDate(data_inicio.year, data_inicio.month, data_inicio.day)
+        qtime = QTime(0, 0, 0)
+        self.dt_data_inicio.setDateTime(QDateTime(qdate, qtime))
+        grid.addWidget(self.dt_data_inicio, 1, 1)
 
-        btn_voltar = QPushButton("Voltar")
-        btn_voltar.setObjectName("btn_voltar")
-        btn_voltar.setFixedSize(80, 35)
-        btn_voltar.clicked.connect(self.close)
-
-        btn_tema = QPushButton()
-        btn_tema.setObjectName("btn_tema")
-        btn_tema.setFixedSize(90, 35)
-        btn_tema.clicked.connect(self._alternar_tema)
-
-        hlayout.addWidget(self.lbl_title)
-        hlayout.addStretch()
-        hlayout.addWidget(self.lbl_clock)
-        hlayout.addWidget(btn_credenciais)
-        hlayout.addWidget(btn_voltar)
-        hlayout.addWidget(btn_tema)
-
-        layout.addWidget(header)
-
-        search = QWidget()
-        search.setFixedHeight(45)
-        slayout = QHBoxLayout(search)
-        slayout.setContentsMargins(10, 0, 10, 0)
-        slayout.setSpacing(10)
-
-        slayout.addWidget(QLabel("Buscar:"))
-        self.txt_pesquisa = QLineEdit()
-        self.txt_pesquisa.setPlaceholderText("Pesquisar automação (em todas as colunas)...")
-        self.txt_pesquisa.setFixedWidth(280)
-        self.txt_pesquisa.textChanged.connect(self._filtrar_agendamentos)
-        slayout.addWidget(self.txt_pesquisa)
-
-        slayout.addWidget(QLabel("Período:"))
-        self.cmb_filtro = QComboBox()
-        self.cmb_filtro.addItems([
-            "Todas",
-            "Hoje",
-            "Amanhã",
-            "Semana atual",
-            "Quinzena atual",
-            "Próxima quinzena",
-            "Mês atual",
-            "Nesse ano",
-            "Ano que vem",
-            "Futuras",
-            "Expiradas"
+        grid.addWidget(QLabel("Periodicidade:"), 2, 0)
+        self.cmb_periodicidade = QComboBox()
+        self.cmb_periodicidade.addItems([
+            "Diário (dias corridos)", "Diário (dias úteis)", "Semanal",
+            "Mensal", "Quinzenal", "Anual"
         ])
-        self.cmb_filtro.setFixedWidth(160)
-        self.cmb_filtro.currentTextChanged.connect(self._filtrar_agendamentos)
-        slayout.addWidget(self.cmb_filtro)
-
-        slayout.addStretch()
-
-        layout.addWidget(search)
-
-        self.table = QTableWidget()
-        self.table.setObjectName("table")
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Grupo", "Nome", "Próxima", "Status", "Progresso", "Retorno"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setShowGrid(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSortingEnabled(False)
-        self.table.setItemDelegateForColumn(4, ProgressBarDelegate(self))
-        self.table.doubleClicked.connect(self._abrir_detalhes)
-        self.table.horizontalHeader().sectionClicked.connect(self._ordenar_tabela)
-
-        layout.addWidget(self.table)
-
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.lbl_status = QLabel("Pronto")
-        self.status_bar.addWidget(self.lbl_status)
-
-        self._atualizar_relogio()
-
-    def _connect_signals(self):
-        self.agendamentos_atualizados.connect(self._atualizar_tabela)
-        self.execucao_terminada.connect(self._finalizar_execucao)
-
-    def _atualizar_relogio(self):
-        self.lbl_clock.setText(datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
-
-    def _gerar_atalho_para_grupo(self, grupo: str):
-        try:
-            base_dir = os.getcwd()
-            bat_path = os.path.join(base_dir, f"iniciar_{grupo}.bat")
-            with open(bat_path, 'w', encoding='utf-8') as f:
-                f.write(f"""@echo off
-title Sistema de Automação (Leve) - Grupo {grupo}
-set PYTHON_DIR=%~dp0python-portable
-set PYTHON_EXE=%PYTHON_DIR%\\pythonw.exe
-start "" "%PYTHON_EXE%" main.py --grupo {grupo}
-exit
-""")
-            vbs_path = os.path.join(base_dir, f"iniciar_{grupo}.vbs")
-            with open(vbs_path, 'w', encoding='utf-8') as f:
-                f.write(f"""' iniciar_{grupo}.vbs
-Set objShell = CreateObject("WScript.Shell")
-strPath = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
-objShell.Run "cmd /c " & strPath & "\\iniciar_{grupo}.bat", 0, False
-""")
-            logger.info(f"Atalhos gerados para grupo '{grupo}'")
-        except Exception as e:
-            logger.warning(f"Erro ao gerar atalhos para {grupo}: {e}")
-
-    def _sincronizar_pasta(self, grupo: str):
-        pasta_grupo = os.path.join(self.pasta_atividades, grupo)
-        if not os.path.exists(pasta_grupo):
-            os.makedirs(pasta_grupo, exist_ok=True)
-            self._gerar_atalho_para_grupo(grupo)
-            return
-
-        arquivos_py = []
-        for arquivo in os.listdir(pasta_grupo):
-            if arquivo.endswith('.py') and os.path.isfile(os.path.join(pasta_grupo, arquivo)):
-                arquivos_py.append(arquivo)
-
-        if not arquivos_py:
-            return
-
-        with get_session() as session:
-            existentes = carregar_agendamentos(session, grupo)
-            nomes_existentes = {ag.nome_script for ag in existentes}
-
-            for nome_arquivo in arquivos_py:
-                nome_sem_ext = os.path.splitext(nome_arquivo)[0]
-                caminho_completo = os.path.join(pasta_grupo, nome_arquivo)
-
-                if nome_sem_ext in nomes_existentes:
-                    for ag in existentes:
-                        if ag.nome_script == nome_sem_ext and ag.script_path != caminho_completo:
-                            ag.script_path = caminho_completo
-                            salvar_agendamento(session, ag)
-                            logger.info(f"Caminho atualizado para {nome_sem_ext}")
-                    continue
-
-                ag = Agendamento()
-                ag.nome_script = nome_sem_ext
-                ag.tipo = "Python"
-                ag.script_path = caminho_completo
-                ag.grupo_origem = grupo
-                ag.periodicidade = Periodicidade.DIARIA
-                ag.horario_execucao = datetime.now().time().replace(hour=8, minute=0, second=0)
-                ag.data_inicio = datetime.now() + timedelta(days=1)
-                ag.proxima_execucao = ag.calcular_proxima_execucao_apartir_de(datetime.now())
-                ag.ativo = True
-                ag.status = "Aguardando"
-
-                salvar_agendamento(session, ag)
-                logger.info(f"Novo agendamento criado para {nome_sem_ext} (grupo {grupo})")
-
-            for ag in existentes:
-                if ag.nome_script not in [os.path.splitext(f)[0] for f in arquivos_py]:
-                    excluir_agendamento(session, ag.nome_script, grupo)
-                    logger.info(f"Agendamento removido: {ag.nome_script} (arquivo não encontrado)")
-
-    def _sincronizar_com_pasta(self):
-        if self.eh_todos:
-            for item in os.listdir(self.pasta_atividades):
-                caminho = os.path.join(self.pasta_atividades, item)
-                if os.path.isdir(caminho):
-                    self._sincronizar_pasta(item)
-        else:
-            self._sincronizar_pasta(self.grupo_selecionado)
-
-    def _carregar_agendamentos(self):
-        with get_session() as session:
-            if self.eh_todos:
-                self.agendamentos_completos = carregar_agendamentos(session, None)
-            else:
-                self.agendamentos_completos = carregar_agendamentos(session, self.grupo_selecionado)
-
-        self.agendamentos_completos.sort(key=lambda x: x.proxima_execucao)
-
-        logger.info(f"Carregados {len(self.agendamentos_completos)} agendamentos")
-
-        # REMOVIDA a limpeza automática do retorno (agora fica sempre visível)
-        # Apenas mantém a ordenação
-
-        self._filtrar_agendamentos()
-        self.agendamentos_atualizados.emit()
-
-    def _marcar_expirados_na_inicializacao(self):
-        agora = datetime.now()
-        alterados = 0
-        with get_session() as session:
-            for ag in self.agendamentos_completos:
-                if ag.proxima_execucao <= agora and ag.status not in ("Executado", "Falha", "Expirado"):
-                    diff = (agora - ag.proxima_execucao).total_seconds()
-                    if diff > 10:
-                        logger.info(f"Marcando como expirado na inicialização: {ag.nome_script} (atraso de {diff:.1f}s)")
-                        ag.status = "Expirado"
-                        ag.resultado_execucao = f"EXPIROU: Sistema iniciado após o horário agendado ({ag.proxima_execucao.strftime('%H:%M:%S')})."
-                        ag.atualizar_proxima_execucao()
-                        salvar_agendamento(session, ag)
-                        alterados += 1
-                    else:
-                        logger.info(f"Agendamento {ag.nome_script} com atraso pequeno ({diff:.1f}s) na inicialização. Tentando executar.")
-                        if ag.ativo and os.path.exists(ag.script_path):
-                            self._executar_automacao(ag)
-        if alterados > 0:
-            logger.info(f"Marcados {alterados} agendamentos como expirados na inicialização.")
-            self._carregar_agendamentos()
-
-    def _resetar_agendamentos_antigos(self):
-        agora = datetime.now()
-        limite = agora - timedelta(hours=1)
-        alterados = 0
-        with get_session() as session:
-            for ag in self.agendamentos_completos:
-                if ag.ultima_execucao < limite and ag.status in ("Executado", "Falha"):
-                    logger.info(f"Resetando agendamento antigo: {ag.nome_script} (status: {ag.status}, última execução: {ag.ultima_execucao})")
-                    ag.status = "Aguardando"
-                    ag.resultado_execucao = ""
-                    ag.atualizar_proxima_execucao()
-                    salvar_agendamento(session, ag)
-                    alterados += 1
-        if alterados > 0:
-            logger.info(f"Resetados {alterados} agendamentos antigos.")
-            self._carregar_agendamentos()
-
-    def _filtrar_agendamentos(self):
-        self.filtro_texto = self.txt_pesquisa.text().strip().lower()
-        self.filtro_periodo = self.cmb_filtro.currentText()
-        self._atualizar_tabela()
-
-    def _obter_filtrados(self) -> List[Agendamento]:
-        if not self.agendamentos_completos:
-            return []
-
-        resultado = self.agendamentos_completos[:]
-
-        if self.filtro_texto:
-            texto_busca = self.filtro_texto.lower()
-            filtrados = []
-            for ag in resultado:
-                prox_str = ag.proxima_execucao.strftime("%d/%m/%Y %H:%M:%S") if ag.proxima_execucao else ""
-                campos = [
-                    ag.grupo_origem.lower(),
-                    ag.nome_script.lower(),
-                    prox_str.lower(),
-                    ag.status.lower(),
-                    ag.resultado_execucao.lower()
-                ]
-                if any(texto_busca in campo for campo in campos):
-                    filtrados.append(ag)
-            resultado = filtrados
-
-        hoje = datetime.now().date()
-        periodo = self.filtro_periodo
-
-        if periodo == "Hoje":
-            resultado = [a for a in resultado if a.proxima_execucao.date() == hoje]
-        elif periodo == "Amanhã":
-            amanha = hoje + timedelta(days=1)
-            resultado = [a for a in resultado if a.proxima_execucao.date() == amanha]
-        elif periodo == "Semana atual":
-            inicio_semana = hoje - timedelta(days=hoje.weekday())
-            fim_semana = inicio_semana + timedelta(days=6)
-            resultado = [a for a in resultado if inicio_semana <= a.proxima_execucao.date() <= fim_semana]
-        elif periodo == "Quinzena atual":
-            if hoje.day <= 15:
-                inicio = hoje.replace(day=1)
-                fim = hoje.replace(day=15)
-            else:
-                inicio = hoje.replace(day=16)
-                if hoje.month == 12:
-                    fim = hoje.replace(year=hoje.year+1, month=1, day=1) - timedelta(days=1)
-                else:
-                    fim = hoje.replace(month=hoje.month+1, day=1) - timedelta(days=1)
-            resultado = [a for a in resultado if inicio <= a.proxima_execucao.date() <= fim]
-        elif periodo == "Próxima quinzena":
-            inicio = hoje + timedelta(days=1)
-            fim = hoje + timedelta(days=15)
-            resultado = [a for a in resultado if inicio <= a.proxima_execucao.date() <= fim]
-        elif periodo == "Mês atual":
-            inicio = hoje.replace(day=1)
-            if hoje.month == 12:
-                fim = hoje.replace(year=hoje.year+1, month=1, day=1) - timedelta(days=1)
-            else:
-                fim = hoje.replace(month=hoje.month+1, day=1) - timedelta(days=1)
-            resultado = [a for a in resultado if inicio <= a.proxima_execucao.date() <= fim]
-        elif periodo == "Nesse ano":
-            inicio = hoje.replace(month=1, day=1)
-            fim = hoje.replace(month=12, day=31)
-            resultado = [a for a in resultado if inicio <= a.proxima_execucao.date() <= fim]
-        elif periodo == "Ano que vem":
-            inicio = hoje.replace(year=hoje.year+1, month=1, day=1)
-            fim = hoje.replace(year=hoje.year+1, month=12, day=31)
-            resultado = [a for a in resultado if inicio <= a.proxima_execucao.date() <= fim]
-        elif periodo == "Futuras":
-            resultado = [a for a in resultado if a.proxima_execucao.date() > hoje]
-        elif periodo == "Expiradas":
-            resultado = [a for a in resultado if a.status == "Expirado"]
-
-        return resultado
-
-    @Slot()
-    def _atualizar_tabela(self):
-        self.agendamentos_exibidos = self._obter_filtrados()
-        self.table.agendamentos = self.agendamentos_exibidos
-        self.table.setRowCount(len(self.agendamentos_exibidos))
-
-        for row, ag in enumerate(self.agendamentos_exibidos):
-            self._set_item(row, 0, ag.grupo_origem)
-            self._set_item(row, 1, ag.nome_script)
-            self._set_item(row, 2, ag.proxima_execucao.strftime("%d/%m/%Y %H:%M:%S"))
-            item_status = QTableWidgetItem(ag.status)
-            if ag.status == "Executado":
-                item_status.setBackground(QColor(144, 238, 144))
-            elif ag.status in ("Falha", "Expirado"):
-                item_status.setBackground(QColor(255, 182, 193))
-            elif ag.status == "Executando":
-                item_status.setBackground(QColor(173, 216, 230))
-            else:
-                item_status.setBackground(QColor(255, 255, 200))
-            self.table.setItem(row, 3, item_status)
-            self.table.setItem(row, 4, QTableWidgetItem(""))
-
-            # Retorno com data da última execução
-            ret = ag.resultado_execucao or ""
-            if ag.ultima_execucao and ret:
-                if ag.ultima_execucao.year > 2000:
-                    data_str = ag.ultima_execucao.strftime("%d/%m/%Y %H:%M")
-                    ret = f"{data_str} - {ret}"
-            item_retorno = QTableWidgetItem(ret)
-            item_retorno.setToolTip(ret)
-            self.table.setItem(row, 5, item_retorno)
-
-        for row in range(self.table.rowCount()):
-            self.table.setRowHeight(row, 35)
-
-        self.lbl_status.setText(f"{len(self.agendamentos_exibidos)} automações exibidas (de {len(self.agendamentos_completos)})")
-        self._aplicar_cores_tabela()
-
-    def _set_item(self, row, col, text):
-        existing = self.table.item(row, col)
-        if existing:
-            existing.setText(text)
-        else:
-            self.table.setItem(row, col, QTableWidgetItem(text))
-
-    def _ordenar_tabela(self, col_idx: int):
-        pass
-
-    def _iniciar_timers(self):
-        self.timer_segundo = QTimer()
-        self.timer_segundo.timeout.connect(self._tick_relogio)
-        self.timer_segundo.start(1000)
-
-        self.timer_barra = QTimer()
-        self.timer_barra.timeout.connect(self._atualizar_barras)
-        self.timer_barra.start(1000)
-
-        self.verificar_agendamentos_timer = QTimer()
-        self.verificar_agendamentos_timer.timeout.connect(self._verificar_agendamentos)
-        self.verificar_agendamentos_timer.start(1000)
-        logger.info("Timers iniciados: relógio, barra e verificação a cada 1 segundo")
-
-        QTimer.singleShot(2000, self._verificar_agendamentos)
-
-    @Slot()
-    def _tick_relogio(self):
-        self._atualizar_relogio()
-
-    @Slot()
-    def _atualizar_barras(self):
-        self.table.viewport().update()
-
-    @Slot()
-    def _verificar_agendamentos(self):
-        agora = datetime.now()
-        logger.info(f"Verificando agendamentos em {agora.strftime('%H:%M:%S.%f')[:-3]}")
-
-        with get_session() as session:
-            if self.eh_todos:
-                self.agendamentos_completos = carregar_agendamentos(session, None)
-            else:
-                self.agendamentos_completos = carregar_agendamentos(session, self.grupo_selecionado)
-
-        self._resetar_agendamentos_antigos()
-        self.agendamentos_completos.sort(key=lambda x: x.proxima_execucao)
-
-        para_executar = []
-
-        for ag in self.agendamentos_completos:
-            if not ag.ativo:
-                continue
-            if ag.status in ("Executando", "Expirado"):
-                continue
-
-            diff = (ag.proxima_execucao - agora).total_seconds()
-            logger.info(f"  Agendamento '{ag.nome_script}': proxima_execucao={ag.proxima_execucao.strftime('%H:%M:%S')}, diff={diff:.3f}s, status={ag.status}")
-
-            if diff > 2.0:
-                continue
-
-            if -2.0 <= diff <= 2.0:
-                if os.path.exists(ag.script_path):
-                    para_executar.append(ag)
-                    logger.info(f"  -> Adicionado à lista de execução (diff={diff:.3f}s)")
-                else:
-                    logger.error(f"  -> Script não encontrado: {ag.script_path}")
-                    ag.status = "Falha"
-                    ag.resultado_execucao = f"FALHA - Script não encontrado: {ag.script_path}"
-                    ag.ultima_execucao = agora
-                    ag.atualizar_proxima_execucao()
-                    with get_session() as session:
-                        salvar_agendamento(session, ag)
-                    self.agendamentos_atualizados.emit()
-            else:
-                logger.warning(f"  -> Atraso de {abs(diff):.3f}s > 2s. Marcando como expirado.")
-                ag.status = "Expirado"
-                ag.resultado_execucao = f"EXPIROU: Horário de execução passou (agendado para {ag.proxima_execucao.strftime('%H:%M:%S')})."
-                ag.atualizar_proxima_execucao()
-                with get_session() as session:
-                    salvar_agendamento(session, ag)
-                self.agendamentos_atualizados.emit()
-
-        if para_executar:
-            logger.info(f"Encontrados {len(para_executar)} agendamentos para executar agora (tolerância de 2s).")
-            for ag in para_executar:
-                self._executar_automacao(ag)
-        else:
-            logger.info("Nenhum agendamento pendente.")
-
-    def _executar_automacao(self, ag: Agendamento):
-        logger.info(f"=== _executar_automacao CHAMADO para {ag.nome_script} ===")
-        if ag.nome_script in self.processos_em_execucao:
-            logger.warning(f"Automação {ag.nome_script} já está em execução. Ignorando.")
-            return
-
-        if ag.status == "Executando":
-            logger.warning(f"Status de {ag.nome_script} estava 'Executando'. Forçando para 'Aguardando'.")
-            ag.status = "Aguardando"
-            with get_session() as session:
-                salvar_agendamento(session, ag)
-
-        if not os.path.exists(ag.script_path):
-            logger.error(f"Script não encontrado: {ag.script_path}")
-            ag.status = "Falha"
-            ag.resultado_execucao = f"FALHA - Script não encontrado: {ag.script_path}"
-            ag.ultima_execucao = datetime.now()
-            ag.atualizar_proxima_execucao()
-            with get_session() as session:
-                salvar_agendamento(session, ag)
-            self.agendamentos_atualizados.emit()
-            return
-
-        logger.info(f"Iniciando execução de {ag.nome_script} (grupo {ag.grupo_origem})")
-        ag.status = "Executando"
-        ag.resultado_execucao = ""
-        with get_session() as session:
-            salvar_agendamento(session, ag)
-        self.agendamentos_atualizados.emit()
-
-        worker = ExecutorWorker(ag, ag.grupo_origem, headless=True)
-        worker.finished.connect(
-            lambda nome, sucesso, mensagem, logs: self.execucao_terminada.emit(nome, sucesso, mensagem, logs)
-        )
-        worker.finished.connect(worker.deleteLater)
-
-        self._threads_em_execucao[ag.nome_script] = worker
-        worker.finished.connect(lambda: self._threads_em_execucao.pop(ag.nome_script, None))
-
-        self.processos_em_execucao.add(ag.nome_script)
-        worker.start()
-        logger.info(f"Thread iniciada para {ag.nome_script} (headless=True)")
-
-    @Slot(str, bool, str, list)
-    def _finalizar_execucao(self, nome: str, sucesso: bool, mensagem: str, logs: list):
-        logger.info(f"Finalizando execução de {nome}: sucesso={sucesso}, mensagem={mensagem}")
-        self.processos_em_execucao.discard(nome)
-
-        with get_session() as session:
-            ag = carregar_agendamento_por_nome(session, nome, self.grupo_selecionado if not self.eh_todos else None)
-            if not ag:
-                with get_session() as session2:
-                    todos = carregar_agendamentos(session2, None)
-                    for a in todos:
-                        if a.nome_script == nome:
-                            ag = a
-                            break
-                if not ag:
-                    logger.warning(f"Agendamento {nome} não encontrado no banco.")
-                    return
-
-            ag.ultima_execucao = datetime.now()
-
-            prefixo = "SUCESSO" if sucesso else "FALHA"
-            if mensagem and mensagem.strip():
-                ag.resultado_execucao = f"{prefixo} - {mensagem.strip()}"
-            else:
-                ag.resultado_execucao = prefixo
-
-            ag.status = "Executado" if sucesso else "Falha"
-            ag.atualizar_proxima_execucao()
-            if ag.proxima_execucao <= datetime.now():
-                ag.status = "Aguardando"
-
-            salvar_agendamento(session, ag)
-
-        for i, a in enumerate(self.agendamentos_completos):
-            if a.nome_script == nome and a.grupo_origem == ag.grupo_origem:
-                a.ultima_execucao = ag.ultima_execucao
-                a.resultado_execucao = ag.resultado_execucao
-                a.status = ag.status
-                a.proxima_execucao = ag.proxima_execucao
-                a.expirado = ag.expirado
-                break
-
-        self.agendamentos_atualizados.emit()
-
-        if logs:
-            self._salvar_logs_detalhados(nome, logs)
-
-    def _salvar_logs_detalhados(self, nome: str, logs: list):
-        try:
-            log_dir = os.path.join(self.pasta_logs)
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, f"{nome}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-            usuario = os.environ.get('USERNAME', 'desconhecido')
-            with open(log_file, 'w', encoding='utf-8') as f:
-                f.write(f"=== LOGS DETALHADOS - {nome} ===\n")
-                f.write(f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
-                f.write(f"Usuario: {usuario}\n")
-                f.write("=" * 50 + "\n")
-                for log in logs:
-                    passo = log.get("passo", 0)
-                    acao = log.get("acao", "")
-                    desc = log.get("descricao", "")
-                    sucesso_log = log.get("sucesso", False)
-                    erro = log.get("erro", "")
-                    detalhes = log.get("detalhes", "")
-
-                    f.write(f"[{passo}] {acao} - {desc} - {'SUCESSO' if sucesso_log else 'FALHA'}\n")
-                    if detalhes:
-                        f.write(f"    Saída do script:\n")
-                        for linha in detalhes.strip().splitlines():
-                            f.write(f"        {linha}\n")
-                    if erro:
-                        f.write(f"    Erro: {erro}\n")
-                f.write("=" * 50 + "\n")
-            logger.info(f"Logs detalhados salvos em: {log_file}")
-        except Exception as e:
-            logger.warning(f"Não foi possível salvar logs detalhados: {e}")
-
-    def _abrir_detalhes(self, index):
-        row = index.row()
-        if row < 0 or row >= len(self.agendamentos_exibidos):
-            return
-        ag = self.agendamentos_exibidos[row]
-        logger.info(f"Abrindo detalhes de {ag.nome_script}")
-
-        dialog = AutomationDetailDialog(
-            ag, ag.grupo_origem, self,
-            on_execute=self._executar_automacao,
-            on_edit=self._editar_automacao,
-            on_delete=self._excluir_automacao,
-            on_chat=self._abrir_chat_lateral
-        )
-        dialog.exec()
-
-    def _editar_automacao(self, ag: Agendamento):
-        logger.info(f"Editando automação {ag.nome_script}")
-        dialog = EditarAutomacaoDialog(ag, ag.grupo_origem, self)
-        if dialog.exec():
-            logger.info("Edição salva, recarregando")
-            self._carregar_agendamentos()
-
-    def _excluir_automacao(self, ag: Agendamento):
-        resposta = QMessageBox.question(
+        self.cmb_periodicidade.currentIndexChanged.connect(self._periodicidade_changed)
+        grid.addWidget(self.cmb_periodicidade, 2, 1)
+
+        grid.addWidget(QLabel("Dia semana:"), 3, 0)
+        self.cmb_dia_semana = QComboBox()
+        self.cmb_dia_semana.addItems(["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"])
+        self.cmb_dia_semana.setVisible(False)
+        grid.addWidget(self.cmb_dia_semana, 3, 1)
+
+        grid.addWidget(QLabel("Dia mês:"), 4, 0)
+        self.spin_dia_mes = QSpinBox()
+        self.spin_dia_mes.setRange(1, 31)
+        self.spin_dia_mes.setValue(1)
+        self.spin_dia_mes.setVisible(False)
+        grid.addWidget(self.spin_dia_mes, 4, 1)
+
+        grid.addWidget(QLabel("Regra dia útil:"), 5, 0)
+        self.cmb_regra_dia_util = QComboBox()
+        self.cmb_regra_dia_util.addItems(["Dia corrido", "Dia útil anterior", "Dia útil posterior"])
+        self.cmb_regra_dia_util.setCurrentIndex(0)
+        self.cmb_regra_dia_util.setVisible(False)
+        grid.addWidget(self.cmb_regra_dia_util, 5, 1)
+
+        grid.addWidget(QLabel("Dia ano:"), 6, 0)
+        self.spin_dia_ano = QSpinBox()
+        self.spin_dia_ano.setRange(1, 365)
+        self.spin_dia_ano.setValue(1)
+        self.spin_dia_ano.setVisible(False)
+        grid.addWidget(self.spin_dia_ano, 6, 1)
+
+        self.chk_ativo = QCheckBox("Agendamento ativo")
+        self.chk_ativo.setChecked(True)
+        grid.addWidget(self.chk_ativo, 7, 0, 1, 2)
+
+        layout.addWidget(gb_agendamento)
+
+        # Botão Resetar Retorno
+        gb_reset = QGroupBox("Retorno da automação")
+        gb_reset.setStyleSheet("QGroupBox { margin-top: 15px; }")
+        reset_layout = QHBoxLayout(gb_reset)
+        lbl_info = QLabel("O retorno fica visível para todos os usuários.\nClique no botão para limpar manualmente.")
+        lbl_info.setWordWrap(True)
+        reset_layout.addWidget(lbl_info)
+        self.btn_reset_retorno = QPushButton("Resetar Retorno")
+        self.btn_reset_retorno.setObjectName("btn_reset_retorno")
+        self.btn_reset_retorno.setFixedSize(140, 32)
+        self.btn_reset_retorno.clicked.connect(self._resetar_retorno)
+        reset_layout.addWidget(self.btn_reset_retorno)
+        layout.addWidget(gb_reset)
+
+        # Grupo: Teste
+        gb_teste = QGroupBox("Teste da automação")
+        gb_teste.setStyleSheet("QGroupBox { margin-top: 15px; }")
+        teste_layout = QHBoxLayout(gb_teste)
+        lbl_teste_info = QLabel("Execute a automação em modo visível para depuração.")
+        lbl_teste_info.setWordWrap(True)
+        teste_layout.addWidget(lbl_teste_info)
+        self.btn_testar = QPushButton("Testar (visível)")
+        self.btn_testar.setObjectName("btn_testar")
+        self.btn_testar.setFixedSize(140, 32)
+        self.btn_testar.clicked.connect(self._testar_automacao)
+        teste_layout.addWidget(self.btn_testar)
+        layout.addWidget(gb_teste)
+
+        # Botões OK / Cancelar
+        btn_box = QDialogButtonBox()
+        btn_box.setOrientation(Qt.Horizontal)
+        btn_box.setStandardButtons(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(self._salvar)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _carregar_valores(self):
+        ag = self.agendamento_original
+        self.txt_nome.setText(ag.nome_script)
+        self.dt_horario.setTime(QTime(ag.horario_execucao.hour, ag.horario_execucao.minute, ag.horario_execucao.second))
+        qdate = QDate(ag.data_inicio.year, ag.data_inicio.month, ag.data_inicio.day)
+        qtime = QTime(0, 0, 0)
+        self.dt_data_inicio.setDateTime(QDateTime(qdate, qtime))
+
+        periodicidade_map = {
+            Periodicidade.DIARIA: "Diário (dias corridos)",
+            Periodicidade.DIARIA_UTIL: "Diário (dias úteis)",
+            Periodicidade.SEMANAL: "Semanal",
+            Periodicidade.MENSAL: "Mensal",
+            Periodicidade.QUINZENAL: "Quinzenal",
+            Periodicidade.ANUAL: "Anual"
+        }
+        texto_period = periodicidade_map.get(ag.periodicidade, "Diário (dias corridos)")
+        idx = self.cmb_periodicidade.findText(texto_period)
+        if idx >= 0:
+            self.cmb_periodicidade.setCurrentIndex(idx)
+
+        if ag.periodicidade == Periodicidade.SEMANAL:
+            self.cmb_dia_semana.setCurrentIndex(ag.dia_semana)
+
+        if ag.periodicidade == Periodicidade.MENSAL:
+            self.spin_dia_mes.setValue(ag.dia_mes)
+            if hasattr(ag, 'regra_dia_util') and ag.regra_dia_util:
+                idx_regra = self.cmb_regra_dia_util.findText(ag.regra_dia_util)
+                if idx_regra >= 0:
+                    self.cmb_regra_dia_util.setCurrentIndex(idx_regra)
+
+        if ag.periodicidade == Periodicidade.ANUAL:
+            self.spin_dia_ano.setValue(ag.dia_ano)
+
+        self.chk_ativo.setChecked(ag.ativo)
+        self._periodicidade_changed(self.cmb_periodicidade.currentIndex())
+
+    def _periodicidade_changed(self, idx: int):
+        texto = self.cmb_periodicidade.currentText()
+        is_semanal = texto == "Semanal"
+        is_mensal = texto == "Mensal"
+        is_anual = texto == "Anual"
+
+        self.cmb_dia_semana.setVisible(is_semanal)
+        self.spin_dia_mes.setVisible(is_mensal)
+        self.cmb_regra_dia_util.setVisible(is_mensal)
+        self.spin_dia_ano.setVisible(is_anual)
+
+    def _resetar_retorno(self):
+        """Reseta o campo de retorno e o status para 'Aguardando'."""
+        reply = QMessageBox.question(
             self,
-            "Confirmar exclusão",
-            f"Excluir a automação '{ag.nome_script}' permanentemente?\n\n"
-            "O arquivo .py também será removido da pasta Atividades.",
-            QMessageBox.Yes | QMessageBox.No
+            "Resetar retorno",
+            "Tem certeza que deseja limpar o retorno desta automação?\n\nO status será alterado para 'Aguardando' e o retorno será removido.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
-        if resposta == QMessageBox.Yes:
-            logger.info(f"Excluindo automação {ag.nome_script}")
-            if ag.script_path and os.path.exists(ag.script_path):
-                try:
-                    os.remove(ag.script_path)
-                    logger.info(f"Script removido: {ag.script_path}")
-                except Exception as e:
-                    logger.warning(f"Não foi possível remover script {ag.script_path}: {e}")
-
+        if reply == QMessageBox.Yes:
+            ag = self.agendamento_original
+            ag.status = "Aguardando"
+            ag.resultado_execucao = ""
+            ag.expirado = False
+            # Salva imediatamente no banco
             with get_session() as session:
-                excluir_agendamento(session, ag.nome_script, ag.grupo_origem)
-            self._carregar_agendamentos()
+                salvar_agendamento(session, ag)
+            logger.info(f"Retorno resetado para '{ag.nome_script}'")
+            QMessageBox.information(self, "Reset concluído", "O retorno foi limpo e o status alterado para 'Aguardando'.")
 
-    def _abrir_chat_lateral(self, ag: Agendamento):
-        if self.chat_lateral and not self.chat_lateral.isVisible():
-            self.chat_lateral.close()
-            self.chat_lateral = None
-        if not self.chat_lateral:
-            self.chat_lateral = ChatSideWindow(ag.grupo_origem, ag.nome_script, parent=self)
-            self.chat_lateral.setWindowFlags(Qt.Window)
-            self.chat_lateral.show()
+    def _testar_automacao(self):
+        if not os.path.exists(self.script_path_original):
+            QMessageBox.warning(self, "Erro", f"Script não encontrado:\n{self.script_path_original}")
+            return
+
+        ag_temp = self.agendamento_original
+        ag_temp.nome_script = self.txt_nome.text().strip() or ag_temp.nome_script
+
+        self.btn_testar.setEnabled(False)
+        self.progress_dialog = QProgressDialog("Executando teste...", "Cancelar", 0, 0, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.show()
+
+        self.teste_worker = ExecutorWorker(ag_temp, self.grupo, headless=False)
+        self.teste_worker.finished.connect(self._on_teste_finished)
+        self.teste_worker.start()
+
+    def _on_teste_finished(self, nome: str, sucesso: bool, mensagem: str, logs: list):
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+        self.btn_testar.setEnabled(True)
+
+        if sucesso:
+            QMessageBox.information(
+                self,
+                "Teste concluído",
+                f"Automação executada com sucesso!\n\n{mensagem[:500]}"
+            )
         else:
-            self.chat_lateral.raise_()
-            self.chat_lateral.activateWindow()
+            QMessageBox.warning(
+                self,
+                "Teste falhou",
+                f"Falha na execução do teste.\n\n{mensagem[:500]}"
+            )
 
-    def _abrir_credenciais(self):
-        from .credential_dialog import CredentialSetupDialog
-        dlg = CredentialSetupDialog(self)
-        dlg.exec()
+        self.teste_worker = None
 
-    def _alternar_tema(self):
-        ThemePreference.toggle_theme()
-        self._aplicar_tema()
-        self._aplicar_cores_tabela()
+    def _salvar(self):
+        nome = self.txt_nome.text().strip()
+        if not nome:
+            QMessageBox.warning(self, "Erro", "O nome da automação não pode estar vazio.")
+            return
 
-    def _aplicar_cores_tabela(self):
-        is_dark = ThemePreference.is_dark()
-        if is_dark:
-            bg_alternate = QColor(45, 45, 50)
-            bg_normal = QColor(30, 30, 35)
-            text_color = QColor(255, 255, 255)
-            header_bg = QColor(60, 60, 70)
-            header_text = QColor(255, 255, 255)
-            grid_color = QColor(70, 70, 80)
+        with get_session() as session:
+            existente = carregar_agendamento_por_nome(session, nome, self.grupo)
+            if existente and existente.nome_script != self.nome_original:
+                QMessageBox.warning(
+                    self,
+                    "Erro",
+                    f"Já existe uma automação com o nome '{nome}' no grupo '{self.grupo}'."
+                )
+                return
+
+        ag = self.agendamento_original
+        ag.nome_script = nome
+        ag.horario_execucao = self.dt_horario.time().toPython()
+        ag.data_inicio = self.dt_data_inicio.dateTime().toPython()
+
+        periodicidade_texto = self.cmb_periodicidade.currentText()
+        if periodicidade_texto == "Diário (dias corridos)":
+            ag.periodicidade = Periodicidade.DIARIA
+        elif periodicidade_texto == "Diário (dias úteis)":
+            ag.periodicidade = Periodicidade.DIARIA_UTIL
+        elif periodicidade_texto == "Semanal":
+            ag.periodicidade = Periodicidade.SEMANAL
+        elif periodicidade_texto == "Mensal":
+            ag.periodicidade = Periodicidade.MENSAL
+        elif periodicidade_texto == "Quinzenal":
+            ag.periodicidade = Periodicidade.QUINZENAL
+        elif periodicidade_texto == "Anual":
+            ag.periodicidade = Periodicidade.ANUAL
         else:
-            bg_alternate = QColor(245, 245, 245)
-            bg_normal = QColor(255, 255, 255)
-            text_color = QColor(0, 0, 0)
-            header_bg = QColor(230, 230, 235)
-            header_text = QColor(0, 0, 0)
-            grid_color = QColor(200, 200, 210)
+            ag.periodicidade = Periodicidade.DIARIA
 
-        for row in range(self.table.rowCount()):
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item:
-                    item.setBackground(bg_alternate if row % 2 else bg_normal)
-                    item.setForeground(text_color)
+        ag.dia_semana = self.cmb_dia_semana.currentIndex()
+        ag.dia_mes = self.spin_dia_mes.value()
+        ag.dia_ano = self.spin_dia_ano.value()
+        ag.ativo = self.chk_ativo.isChecked()
+        ag.regra_dia_util = self.cmb_regra_dia_util.currentText() if ag.periodicidade == Periodicidade.MENSAL else ""
 
-        header = self.table.horizontalHeader()
-        header.setStyleSheet(f"""
-            QHeaderView::section {{
-                background-color: {header_bg.name()};
-                color: {header_text.name()};
-                padding: 5px;
-                border: 1px solid {grid_color.name()};
-            }}
-        """)
+        # Recalcula próxima execução, mas NÃO mexe no retorno nem no status
+        ag.atualizar_proxima_execucao()
+        if ag.expirado or ag.status == "Expirado":
+            ag.reativar()
+            # Não limpa retorno, mantém o que estava
 
-        self.table.setStyleSheet(f"""
-            QTableWidget {{
-                gridline-color: {grid_color.name()};
-                alternate-background-color: {bg_alternate.name()};
-            }}
-        """)
+        if nome != self.nome_original and self.script_path_original:
+            dirname = os.path.dirname(self.script_path_original)
+            ext = os.path.splitext(self.script_path_original)[1]
+            novo_caminho = os.path.join(dirname, f"{nome}{ext}")
+            try:
+                shutil.move(self.script_path_original, novo_caminho)
+                ag.script_path = novo_caminho
+                logger.info(f"Script renomeado: {self.script_path_original} -> {novo_caminho}")
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Não foi possível renomear o arquivo:\n{str(e)}")
+                return
 
-    def closeEvent(self, event):
-        logger.info("Iniciando fechamento da MainWindow...")
-        if self.timer_segundo:
-            self.timer_segundo.stop()
-        if self.timer_barra:
-            self.timer_barra.stop()
-        if self.verificar_agendamentos_timer:
-            self.verificar_agendamentos_timer.stop()
-
-        for nome, thread in list(self._threads_em_execucao.items()):
-            if thread.isRunning():
-                logger.info(f"Aguardando término da thread {nome}...")
-                if not thread.wait(10000):
-                    logger.warning(f"Thread {nome} não terminou, forçando finalização.")
-                    thread.terminate()
-                    thread.wait()
-
-        if self.chat_lateral:
-            self.chat_lateral.close()
-            self.chat_lateral = None
-
-        event.accept()
-        logger.info("MainWindow fechada.")
+        try:
+            with get_session() as session:
+                salvar_agendamento(session, ag)
+            logger.info(f"Agendamento '{nome}' atualizado com sucesso.")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao salvar no banco de dados:\n{str(e)}")
 
     def _aplicar_tema(self):
         is_dark = ThemePreference.is_dark()
-
-        for child in self.findChildren(QPushButton):
-            if child.objectName() == "btn_tema":
-                child.setText("☀️ Claro" if is_dark else "🌙 Escuro")
-                break
-
         if is_dark:
             qss = """
-            QMainWindow, QWidget { background-color: #2b2b2b; color: #ffffff; }
-            QTableWidget { background-color: #3c3c3c; color: #ffffff; gridline-color: #555555; }
-            QTableWidget::item { color: #ffffff; }
-            QTableWidget::item:selected { background-color: #1e5f8e; }
-            QHeaderView::section { background-color: #404040; color: #ffffff; padding: 5px; border: 1px solid #555555; }
-            QLineEdit, QComboBox { background-color: #3c3c3c; color: #ffffff; border: 1px solid #555555; padding: 5px; border-radius: 3px; }
+            QDialog { background-color: #2b2b2b; }
+            QLabel { color: #ffffff; }
+            QLineEdit, QComboBox, QSpinBox, QDateTimeEdit {
+                background-color: #3c3c3c;
+                color: #ffffff;
+                border: 1px solid #555555;
+                padding: 4px;
+                border-radius: 3px;
+            }
+            QGroupBox { color: #ffffff; border: 1px solid #555555; margin-top: 10px; }
+            QGroupBox::title { color: #ffffff; }
+            QCheckBox { color: #ffffff; }
             QPushButton {
                 background-color: #505050;
                 color: #ffffff;
                 border: none;
-                padding: 8px;
+                padding: 6px 12px;
                 border-radius: 4px;
             }
             QPushButton:hover { background-color: #606060; }
-            QPushButton#btn_credenciais { background-color: #1e5f8e; }
-            QPushButton#btn_credenciais:hover { background-color: #1a4a7a; }
-            QStatusBar { background-color: #404040; color: #ffffff; }
-            QLabel#title { color: #ffffff; }
-            QLabel#clock { color: #aaaaaa; }
+            QPushButton#btn_testar { background-color: #b8860b; }
+            QPushButton#btn_testar:hover { background-color: #d4a017; }
+            QPushButton#btn_reset_retorno { background-color: #8b0000; }
+            QPushButton#btn_reset_retorno:hover { background-color: #a52a2a; }
             """
         else:
             qss = """
-            QMainWindow, QWidget { background-color: #f5f6f8; color: #000000; }
-            QTableWidget { background-color: #ffffff; color: #000000; gridline-color: #d0d0d0; }
-            QTableWidget::item { color: #000000; }
-            QTableWidget::item:selected { background-color: #cce0ff; }
-            QHeaderView::section { background-color: #e8e9eb; color: #000000; padding: 5px; border: 1px solid #d0d0d0; }
-            QLineEdit, QComboBox { background-color: #ffffff; color: #000000; border: 1px solid #cccccc; padding: 5px; border-radius: 3px; }
+            QDialog { background-color: #f5f6f8; }
+            QLabel { color: #000000; }
+            QLineEdit, QComboBox, QSpinBox, QDateTimeEdit {
+                background-color: #ffffff;
+                color: #000000;
+                border: 1px solid #cccccc;
+                padding: 4px;
+                border-radius: 3px;
+            }
+            QGroupBox { color: #000000; border: 1px solid #cccccc; margin-top: 10px; }
+            QGroupBox::title { color: #000000; }
+            QCheckBox { color: #000000; }
             QPushButton {
                 background-color: #e8e9eb;
                 color: #000000;
                 border: none;
-                padding: 8px;
+                padding: 6px 12px;
                 border-radius: 4px;
             }
             QPushButton:hover { background-color: #d0d1d4; }
-            QPushButton#btn_credenciais { background-color: #1e5f8e; color: #ffffff; }
-            QStatusBar { background-color: #e8e9eb; color: #000000; }
-            QLabel#title { color: #000000; }
-            QLabel#clock { color: #666666; }
+            QPushButton#btn_testar { background-color: #ffc107; color: #000000; }
+            QPushButton#btn_testar:hover { background-color: #e0a800; }
+            QPushButton#btn_reset_retorno { background-color: #dc3545; color: #ffffff; }
+            QPushButton#btn_reset_retorno:hover { background-color: #c82333; }
             """
         self.setStyleSheet(qss)
-        self._aplicar_cores_tabela()
